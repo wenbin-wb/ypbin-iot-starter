@@ -1133,12 +1133,47 @@ M0 不是「搭个空壳」，而是**把"能跑"这件事变成可验证事实*
 **M0 期间识别出的一个 SPI 缺口**：原 `DeviceRegistry` 只覆盖「设备从哪来」，未覆盖「链路建链参数从哪来」。
 已补齐 `ConnectionSpecProvider`（详见 `SPI.md` §8.2）——两者必须拆开，否则 device 级会携带链路级参数。
 
+**M0 独立代码审核结果（3 个方向 + 1 轮对抗性复审）**
+
+共派 4 个独立审核 agent：SPI 契约一致性、并发与资源安全、规范合规、P0 修复对抗性复审。
+累计发现 **9 个 P0** 与 30+ 条 P1/P2，已修复项见下（剩余项列于本节末尾）。
+
+| 来源 | P0 问题 | 修复 |
+|---|---|---|
+| 并发审核 | 上限拒绝分支不完成 Future → 并发等待者永久挂起 → **容器启动死锁** | 拒绝路径也走统一交付通道；新增 CR-5 回归测试 |
+| 并发审核 | 空闲回收「判定+关闭」跨临界区 → acquire 可拿到正在关闭的链路（TOCTOU） | 判定+翻转+摘除收进同一临界区 + 可失败 `tryRetain`；新增 CR-6 |
+| 并发审核 | `closeAll`/`acquire` 无生命周期锁 → 关闭后仍建出无人关闭的孤儿链路 | 读写锁保护「closed 检查+入表+建链」；新增 CR-7 |
+| 并发复审 | **重试耗尽的判定位于建链之后** → 最后一次真的建链入表却返回失败 → 永久孤儿 + 单次 acquire 放大 4 次建链 | 判定移到方法入口 |
+| SPI 审核 | `probe` 默认实现抛 `UnsupportedOperationException`（非 IotException、无消息键），且未归一化 → 违反「probe 永不异常完成」 | 改为文档承诺的「复用 open」+ `Stages.normalize` 归一化 |
+| SPI 审核 | `IotLifecycle.bind` 失败不归还句柄 → 引用计数永不归零、空闲回收永久失效（**实测 activeCount 恒为 1**） | 失败即 `handle.release()`；新增 LIFE-09 |
+| SPI 审核 | `ConnectionSpec.tls` 从未被消费 → **配置 TLS 静默明文建链** | transport 层 fail-fast 拒绝；新增 TCP-07 回归 |
+| SPI 审核 | `DeviceRegistry.addChangeListener` 整条未接线 → 运行期增删设备完全无效 | 落地 ADD/UPDATE/REMOVE + revision 幂等 + 设备级排他锁；新增 LIFE-11 |
+| 合规审核 | `Endpoint` 静默吞 `URISyntaxException` 且 Javadoc 谎称校验（**R11 铁律违规**，且被测试固化成契约） | 构造期 fail-fast 抛 `AddressParseException` + scheme 必需校验 |
+
+**审核过程本身暴露的一个流程问题（已记录）**：首次 P0 批量修复脚本因一处锚点未命中而
+`SystemExit` 提前退出，导致其后所有补丁未执行，但提交信息按脚本意图描述了修复内容 ——
+即**提交信息与代码不一致**。该问题由对抗性复审通过 `git show --name-only` 发现并纠正。
+**教训：批量补丁脚本不应在单个锚点未命中时终止整个批次；提交前必须核对实际变更文件列表。**
+
 **M0 阶段刻意保留的两处实现简化**（有明确理由与触发条件）：
 
 | 简化 | 现状 | 触发升级的条件 |
 |---|---|---|
 | 调度器 | 用 `ScheduledExecutorService`，未实现 DESIGN §4.4 的分层时间轮 | 通过 1 万连接门禁、准备冲击 10 万连接时（M0 门槛下堆开销与精度完全够用） |
 | Netty 传输 | 用 `NioEventLoopGroup`，未切 `EpollEventLoopGroup` | 同上（届时可拿到 `SO_REUSEPORT` 与更低系统调用开销） |
+
+**M0 已知未完成项（复审发现，不影响骨架可用性，列入 M1 前置）**
+
+| 级别 | 项 | 说明 |
+|---|---|---|
+| P1 | 空闲检测未接线 | `IdleStateHandler` 已装入但无 `IdleStateEvent` 消费点，`idle-interval` 配了不生效；且缺 `ReadTimeoutHandler`。M0 默认值为 0（不启用），故不构成现行故障 |
+| P1 | 建链速率限制未实现 | `ypbin.iot.connection.connect-rate-limit` / `connect-rate-jitter` 已声明但无执行点——**10 万连接的建链风暴目前没有闸门**，属 M1 必做项 |
+| P1 | 部分配置项零消费 | `scheduler.shutdown-timeout`、`devices.probe-before-bind`、`devices.default-poll-interval` 已声明未消费（本仓自列的「配置静默失效」坑） |
+| P1 | 英文异常字面量 | 约 80 处 JDK 异常仍用英文字面量（`IllegalArgumentException` 等），未走消息键；需先裁决「编程错误类是否豁免」 |
+| P1 | 架构门禁缺 4 类规则 | 内联 FQCN / `@Bean` 条件 / `ordinal` / autoconfig 登记注册，文档称已强制但实际未实现；且 `AGENTS.md` 引用的 `RegistrationDiscoveryTest` 本仓不存在（注册可见性断言目前只在 starter 的 CFG-08 中） |
+| P2 | `closeAll()` 终止性语义 | 调用后注册中心永久失效且无 reopen；名字暗示「可继续用」，需在迁移说明中标注 |
+| P2 | `maxFrameLength < delimiter` 校验位置 | 已在 transport 抛 `IllegalArgumentException`，但更应前移到 `FramingSpec` 构造期 |
+| P2 | `AdapterSettings.extended()` 未知 key 校验 | 三处 Javadoc 承诺「未知 key 必须 warn」，无执行点 |
 
 ### 7.4 M1 之后的质量门禁
 
