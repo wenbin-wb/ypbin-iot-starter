@@ -1,0 +1,4 @@
+# Boot 4.1：接口包已从 org.springframework.boot.env.* 迁至 org.springframework.boot.*，
+# 注册键必须同步修改，否则默认值会静默失效（母仓已踩过该坑）。
+org.springframework.boot.EnvironmentPostProcessor=\
+cn.ypbin.iot.spring.autoconfigure.IotDefaultsEnvironmentPostProcessor
