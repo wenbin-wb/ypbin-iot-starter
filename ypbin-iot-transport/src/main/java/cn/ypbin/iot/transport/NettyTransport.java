@@ -42,7 +42,6 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -99,16 +98,17 @@ public final class NettyTransport implements AutoCloseable {
     /**
      * 打开一条 TCP 链路。
      *
-     * @param spec           连接规格
-     * @param idleInterval   空闲检测间隔；{@link Duration#ZERO} 表示不启用
-     * @param sessionFactory 由协议模块提供的会话工厂（拿到链路后构造自己的 {@link DeviceSession}）
-     * @param <S>            会话类型
+     * <p>返回的链路<b>尚未绑定设备会话</b>：会话由协议模块在
+     * {@code ProtocolAdapter.bind} 阶段创建并装入
+     * （见 {@link NettyChannelConnection#bindSession(DeviceSession)}）。
+     * 这样 1:1 与 1:N 协议共用同一套链路，不需要在 {@code open} 阶段伪造设备身份。</p>
+     *
+     * @param spec         连接规格
+     * @param idleInterval 空闲检测间隔；{@link Duration#ZERO} 表示不启用
      * @return 链路就绪后完成的 Stage；建链失败时以 {@link ConnectionException} 异常完成
      */
-    public <S extends DeviceSession> CompletionStage<NettyChannelConnection<S>> connect(
-            ConnectionSpec spec, Duration idleInterval, Function<NettyChannelConnection<S>, S> sessionFactory) {
+    public CompletionStage<NettyChannelConnection> connect(ConnectionSpec spec, Duration idleInterval) {
         Objects.requireNonNull(spec, "spec must not be null");
-        Objects.requireNonNull(sessionFactory, "sessionFactory must not be null");
         Endpoint endpoint = spec.endpoint();
         String host = endpoint.host();
         int port = endpoint.port();
@@ -116,14 +116,14 @@ public final class NettyTransport implements AutoCloseable {
             return CompletableFuture.failedFuture(new ConnectionException(spec.connectionId(),
                     IotMessageKeys.CONFIG_INVALID, "endpoint requires host and port: " + endpoint.uri()));
         }
-        CompletableFuture<NettyChannelConnection<S>> result = new CompletableFuture<>();
+        CompletableFuture<NettyChannelConnection> result = new CompletableFuture<>();
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(group)
                 .channel(NioSocketChannel.class)
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) spec.connectTimeout().toMillis())
-                .handler(channelInitializer(spec, idleInterval, sessionFactory, result));
+                .handler(channelInitializer(spec, idleInterval, result));
         bootstrap.connect(new InetSocketAddress(host, port)).addListener(future -> {
             if (!future.isSuccess()) {
                 result.completeExceptionally(new ConnectionException(spec.connectionId(),
@@ -148,10 +148,9 @@ public final class NettyTransport implements AutoCloseable {
         log.debug("[ypbin-iot] netty transport closed.");
     }
 
-    private <S extends DeviceSession> ChannelInitializer<SocketChannel> channelInitializer(
+    private ChannelInitializer<SocketChannel> channelInitializer(
             ConnectionSpec spec, Duration idleInterval,
-            Function<NettyChannelConnection<S>, S> sessionFactory,
-            CompletableFuture<NettyChannelConnection<S>> result) {
+            CompletableFuture<NettyChannelConnection> result) {
         return new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel channel) {
@@ -161,7 +160,7 @@ public final class NettyTransport implements AutoCloseable {
                 }
                 addFraming(channel, framingSpec);
                 channel.pipeline().addLast(new ByteArrayEncoder());
-                channel.pipeline().addLast(new TransportHandler<>(spec, result, sessionFactory));
+                channel.pipeline().addLast(new TransportHandler(spec, result));
             }
         };
     }
@@ -189,31 +188,25 @@ public final class NettyTransport implements AutoCloseable {
     /**
      * 传输层 ChannelHandler：把收到的字节帧交给链路，并在链路就绪后装配协议会话。
      *
-     * @param <S> 会话类型
      * @author wenbin
      * @since 2026-09-13
      */
-    private static final class TransportHandler<S extends DeviceSession>
-            extends SimpleChannelInboundHandler<ByteBuf> {
+    private static final class TransportHandler extends SimpleChannelInboundHandler<ByteBuf> {
 
         private final ConnectionSpec spec;
 
-        private final CompletableFuture<NettyChannelConnection<S>> result;
+        private final CompletableFuture<NettyChannelConnection> result;
 
-        private final Function<NettyChannelConnection<S>, S> sessionFactory;
+        private NettyChannelConnection connection;
 
-        private NettyChannelConnection<S> connection;
-
-        private TransportHandler(ConnectionSpec spec, CompletableFuture<NettyChannelConnection<S>> result,
-                Function<NettyChannelConnection<S>, S> sessionFactory) {
+        private TransportHandler(ConnectionSpec spec, CompletableFuture<NettyChannelConnection> result) {
             this.spec = spec;
             this.result = result;
-            this.sessionFactory = sessionFactory;
         }
 
         @Override
         public void channelActive(ChannelHandlerContext context) {
-            connection = new NettyChannelConnection<>(spec, context.channel(), sessionFactory);
+            connection = new NettyChannelConnection(spec, context.channel());
             result.complete(connection);
         }
 
@@ -221,7 +214,7 @@ public final class NettyTransport implements AutoCloseable {
         protected void channelRead0(ChannelHandlerContext context, ByteBuf message) {
             byte[] payload = new byte[message.readableBytes()];
             message.readBytes(payload);
-            NettyChannelConnection<S> current = connection;
+            NettyChannelConnection current = connection;
             if (current != null) {
                 current.onFrame(payload);
             }
@@ -229,7 +222,7 @@ public final class NettyTransport implements AutoCloseable {
 
         @Override
         public void channelInactive(ChannelHandlerContext context) {
-            NettyChannelConnection<S> current = connection;
+            NettyChannelConnection current = connection;
             if (current != null) {
                 current.onChannelInactive();
             } else {
@@ -242,7 +235,7 @@ public final class NettyTransport implements AutoCloseable {
         @Override
         public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
             log.error("[ypbin-iot] transport error on connection {}", spec.connectionId(), cause);
-            NettyChannelConnection<S> current = connection;
+            NettyChannelConnection current = connection;
             if (current != null) {
                 current.onError(cause);
             } else {

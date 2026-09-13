@@ -38,7 +38,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,11 +54,10 @@ import org.slf4j.LoggerFactory;
  * <p>并发原语使用 {@link ReentrantLock} 与 {@link CopyOnWriteArrayList}，
  * 不使用 {@code synchronized}（虚拟线程下会 pinning）。</p>
  *
- * @param <S> 会话类型
  * @author wenbin
  * @since 2026-09-13
  */
-public final class NettyChannelConnection<S extends DeviceSession> implements ProtocolConnection {
+public final class NettyChannelConnection implements ProtocolConnection {
 
     private static final Logger log = LoggerFactory.getLogger(NettyChannelConnection.class);
 
@@ -69,8 +67,6 @@ public final class NettyChannelConnection<S extends DeviceSession> implements Pr
     private final ConnectionSpec spec;
 
     private final Channel channel;
-
-    private final S session;
 
     private final Instant openedAt;
 
@@ -90,19 +86,30 @@ public final class NettyChannelConnection<S extends DeviceSession> implements Pr
 
     private int inboundCapacity = DEFAULT_INBOUND_CAPACITY;
 
+    private volatile DeviceSession session;
+
     /**
      * 创建链路对象（由 {@link NettyTransport} 在 channelActive 时调用）。
      *
-     * @param spec           连接规格
-     * @param channel        底层 channel
-     * @param sessionFactory 会话工厂
+     * <p><b>此时尚无会话</b>：1:N 协议（Modbus 网关）的设备身份在 {@code bind} 阶段才确定，
+     * 因此会话由协议模块在绑定后通过 {@link #bindSession(DeviceSession)} 装入。</p>
+     *
+     * @param spec    连接规格
+     * @param channel 底层 channel
      */
-    NettyChannelConnection(ConnectionSpec spec, Channel channel,
-            Function<NettyChannelConnection<S>, S> sessionFactory) {
+    NettyChannelConnection(ConnectionSpec spec, Channel channel) {
         this.spec = spec;
         this.channel = channel;
         this.openedAt = Instant.now();
-        this.session = sessionFactory.apply(this);
+    }
+
+    /**
+     * 装入设备会话（由协议模块在 bind 阶段调用）。
+     *
+     * @param deviceSession 设备会话
+     */
+    public void bindSession(DeviceSession deviceSession) {
+        this.session = deviceSession;
     }
 
     @Override
@@ -127,7 +134,12 @@ public final class NettyChannelConnection<S extends DeviceSession> implements Pr
 
     @Override
     public DeviceSession session() {
-        return session;
+        DeviceSession current = session;
+        if (current == null) {
+            throw new IllegalStateException("no device session bound to connection " + spec.connectionId()
+                    + "; call ProtocolAdapter.bind(...) first");
+        }
+        return current;
     }
 
     @Override
