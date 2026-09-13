@@ -17,6 +17,7 @@ package cn.ypbin.iot.core.protocol;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
+import cn.ypbin.iot.core.i18n.IotMessageKeys;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.ProbeResult;
@@ -115,7 +116,18 @@ public interface ProtocolAdapter {
      * @return 探测结果 Stage
      */
     default CompletionStage<ProbeResult> probe(ConnectionSpec spec, AdapterContext context) {
-        return Stages.failed(new UnsupportedCapabilityException(descriptor().code(), "probe"));
+        // 默认实现复用 open：建链成功后立即关闭，用 describe() 填充结果。
+        // 关键：probe 永不异常完成——探测失败属正常结果，用 reachable=false 表达。
+        return Stages.normalize(open(spec, context)
+                .thenApply(connection -> {
+                    try {
+                        return ProbeResult.reachable(descriptor(), connection.describe());
+                    } finally {
+                        connection.close();
+                    }
+                })
+                .exceptionally(error -> ProbeResult.unreachable(
+                        descriptor(), IotMessageKeys.CONNECTION_FAILED)));
     }
 
     /**

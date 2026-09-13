@@ -47,6 +47,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -118,7 +119,9 @@ class ConnectionRegistryTest {
             CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
                     .orTimeout(10, TimeUnit.SECONDS).join();
 
-            assertThat(adapter.openInvocations()).as("单飞失败：open 被调用多次").isEqualTo(1);
+            // 两个计数器都要断言：适配器侧（真实 open 次数）与注册中心侧（框架记录的发起次数）
+            assertThat(adapter.openInvocations()).as("单飞失败：适配器 open 被调用多次").isEqualTo(1);
+            assertThat(registry.openInvocationCount()).as("注册中心记录的建链次数也必须是 1").isEqualTo(1);
             assertThat(registry.activeCount()).as("注册表中应只有一条链路").isEqualTo(1);
             futures.forEach(future -> assertThat(future.join().connectionId()).isEqualTo(CONNECTION_ID));
         } finally {
@@ -234,6 +237,115 @@ class ConnectionRegistryTest {
         }
     }
 
+    @Test
+    @DisplayName("CR-5 连接数上限拒绝时，所有并发等待者都必须完成（不得永久挂起）")
+    void limitRejectionMustCompleteAllWaiters() throws Exception {
+        // 复现旧实现的缺陷：上限分支只把 fresh 从表中摘除却不 complete，
+        // 已挂到它上面的并发调用者会永久挂起 → IotLifecycle 的 join 阻塞 → 容器启动死锁。
+        int threads = 16;
+        CountingAdapter adapter = new CountingAdapter(Duration.ZERO, null);
+        ConnectionRegistry registry = new ConnectionRegistry(Duration.ofMinutes(5), 1, scheduler,
+                Clock.systemUTC());
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        List<CompletableFuture<Throwable>> futures = new ArrayList<>();
+        try {
+            // 先占满配额
+            ConnectionRegistry.ConnectionHandle occupied = registry
+                    .acquire(adapter, spec("occupied"), context).toCompletableFuture().join();
+            try {
+                for (int i = 0; i < threads; i++) {
+                    futures.add(CompletableFuture.supplyAsync(() -> {
+                        awaitQuietly(start);
+                        return registry.acquire(adapter, spec("over-limit"), context)
+                                .toCompletableFuture().handle((handle, error) -> error);
+                    }, pool).thenCompose(stage -> stage));
+                }
+                start.countDown();
+                // 关键断言：必须全部完成，而不是超时
+                CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+                        .orTimeout(5, TimeUnit.SECONDS).join();
+                for (CompletableFuture<Throwable> future : futures) {
+                    assertThat(future.join())
+                            .as("超限时每个等待者都必须以 ConnectionException 完成")
+                            .isInstanceOf(ConnectionException.class);
+                }
+            } finally {
+                occupied.release();
+            }
+        } finally {
+            pool.shutdownNow();
+            registry.close();
+        }
+    }
+
+    @Test
+    @DisplayName("CR-6 空闲回收与 acquire 竞态下，不得交付已关闭的链路")
+    void acquireMustNeverReceiveReclaimedConnection() {
+        // 复现旧实现的 TOCTOU：回收的「校验 + 关闭」不在同一临界区，
+        // acquire 可在校验通过后拿到一条正在被关闭的链路。
+        CountingAdapter adapter = new CountingAdapter(Duration.ZERO, null);
+        ConnectionRegistry registry = new ConnectionRegistry(Duration.ofMillis(1), 100, scheduler,
+                Clock.systemUTC());
+        try {
+            for (int round = 0; round < 300; round++) {
+                ConnectionRegistry.ConnectionHandle handle = registry
+                        .acquire(adapter, spec(CONNECTION_ID), context).toCompletableFuture().join();
+                TestConnection connection = adapter.lastConnection();
+                assertThat(connection.closed())
+                        .as("第 %d 轮交付了已关闭的链路（空闲回收与 acquire 之间存在竞态）", round)
+                        .isFalse();
+                handle.release();
+            }
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
+    @DisplayName("CR-7 close 与并发 acquire 竞态后，不得残留无人关闭的孤儿链路")
+    void closeMustNotLeaveOrphanConnections() throws Exception {
+        int threads = 8;
+        CountingAdapter adapter = new CountingAdapter(Duration.ZERO, null);
+        ConnectionRegistry registry = new ConnectionRegistry(Duration.ofMinutes(5), 1000, scheduler,
+                Clock.systemUTC());
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < threads; i++) {
+                futures.add(CompletableFuture.runAsync(() -> {
+                    awaitQuietly(start);
+                    for (int round = 0; round < 50; round++) {
+                        try {
+                            registry.acquire(adapter, spec("race-" + round), context)
+                                    .toCompletableFuture().join().release();
+                        } catch (RuntimeException expectedAfterClose) {
+                            return;
+                        }
+                    }
+                }, pool));
+            }
+            start.countDown();
+            // 等至少建出一条链路再关闭，否则本用例退化为「什么都没发生」的假通过
+            awaitUntil(() -> !adapter.createdConnections().isEmpty(), Duration.ofSeconds(3));
+            registry.close();
+            CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+                    .orTimeout(10, TimeUnit.SECONDS).join();
+
+            assertThat(registry.activeCount()).as("关闭后注册表必须为空").isZero();
+            Map<String, TestConnection> created = adapter.createdConnections();
+            assertThat(created).as("本轮应至少建过链路（否则用例失去意义）").isNotEmpty();
+            for (Map.Entry<String, TestConnection> entry : created.entrySet()) {
+                assertThat(entry.getValue().closed())
+                        .as("关闭后不得残留未关闭的孤儿链路: %s", entry.getKey())
+                        .isTrue();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private static ConnectionSpec spec(String connectionId) {
         return new ConnectionSpec(connectionId, CODE, Endpoint.of("tcp://127.0.0.1:1"),
                 Duration.ofSeconds(2), Duration.ofSeconds(2), null, null, Map.of());
@@ -304,6 +416,8 @@ class ConnectionRegistryTest {
 
         private volatile TestConnection lastConnection;
 
+        private final Map<String, TestConnection> created = new ConcurrentHashMap<>();
+
         private CountingAdapter(Duration openDelay, RuntimeException failure) {
             this.openDelay = openDelay;
             this.failure = failure;
@@ -330,6 +444,7 @@ class ConnectionRegistryTest {
                 }
                 TestConnection connection = new TestConnection(spec.connectionId());
                 lastConnection = connection;
+                created.put(spec.connectionId(), connection);
                 return connection;
             });
         }
@@ -345,6 +460,10 @@ class ConnectionRegistryTest {
 
         private TestConnection lastConnection() {
             return lastConnection;
+        }
+
+        private Map<String, TestConnection> createdConnections() {
+            return Map.copyOf(created);
         }
     }
 

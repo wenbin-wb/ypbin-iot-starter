@@ -15,6 +15,7 @@
  */
 package cn.ypbin.iot.core.model;
 
+import cn.ypbin.iot.core.exception.AddressParseException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.LinkedHashMap;
@@ -34,6 +35,10 @@ import java.util.Optional;
  *
  * <p>协议特有参数一律放 URI 查询串，由各协议模块自行解释与校验。</p>
  *
+ * <p><b>构造期即校验 URI 合法性</b>：非法 URI 在构造时抛
+ * {@link AddressParseException}，而不是被静默接受后让 {@code scheme()} 返回空串、
+ * {@code port()} 返回 -1 一路传播到运行期——那种「配置错了但没人知道」的失败最难排查。</p>
+ *
  * @param uri 端点 URI
  * @author wenbin
  * @since 2026-09-13
@@ -49,7 +54,12 @@ public record Endpoint(String uri) {
     public Endpoint {
         Objects.requireNonNull(uri, "uri must not be null");
         if (uri.isBlank()) {
-            throw new IllegalArgumentException("endpoint uri must not be blank");
+            throw new AddressParseException(null, uri, "endpoint uri must not be blank");
+        }
+        try {
+            new URI(uri);
+        } catch (URISyntaxException ex) {
+            throw new AddressParseException(null, uri, ex.getReason());
         }
     }
 
@@ -69,7 +79,7 @@ public record Endpoint(String uri) {
      * @return 协议名；无法解析时返回空字符串
      */
     public String scheme() {
-        String value = parsed().map(URI::getScheme).orElse(null);
+        String value = parsed().getScheme();
         return value == null ? "" : value;
     }
 
@@ -79,7 +89,7 @@ public record Endpoint(String uri) {
      * @return 主机名；无主机时返回空字符串
      */
     public String host() {
-        String value = parsed().map(URI::getHost).orElse(null);
+        String value = parsed().getHost();
         return value == null ? "" : value;
     }
 
@@ -89,7 +99,7 @@ public record Endpoint(String uri) {
      * @return 端口；未指定时返回 {@link #NO_PORT}
      */
     public int port() {
-        return parsed().map(URI::getPort).orElse(NO_PORT);
+        return parsed().getPort();
     }
 
     /**
@@ -98,7 +108,7 @@ public record Endpoint(String uri) {
      * @return 路径
      */
     public Optional<String> path() {
-        return parsed().map(URI::getPath).filter(value -> !value.isEmpty());
+        return Optional.ofNullable(parsed().getPath()).filter(value -> !value.isEmpty());
     }
 
     /**
@@ -107,7 +117,7 @@ public record Endpoint(String uri) {
      * @return 不可变参数视图；无参数时返回空 Map
      */
     public Map<String, String> parameters() {
-        String query = parsed().map(URI::getQuery).orElse(null);
+        String query = parsed().getQuery();
         if (query == null || query.isEmpty()) {
             return Map.of();
         }
@@ -126,11 +136,17 @@ public record Endpoint(String uri) {
         return Map.copyOf(result);
     }
 
-    private Optional<URI> parsed() {
+    /**
+     * 解析 URI。
+     *
+     * <p>构造期已校验，这里不会失败；若真的失败，说明 record 被绕过构造器创建，
+     * 此时<b>显式抛异常</b>而不是返回空——静默返回空会让调用方以为「这个端点没有 scheme」。</p>
+     */
+    private URI parsed() {
         try {
-            return Optional.of(new URI(uri));
+            return new URI(uri);
         } catch (URISyntaxException ex) {
-            return Optional.empty();
+            throw new AddressParseException(null, uri, ex.getReason());
         }
     }
 

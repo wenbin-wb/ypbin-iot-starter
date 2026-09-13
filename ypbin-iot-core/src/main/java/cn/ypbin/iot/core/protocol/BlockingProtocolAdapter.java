@@ -16,6 +16,7 @@
 package cn.ypbin.iot.core.protocol;
 
 import cn.ypbin.iot.core.context.AdapterContext;
+import cn.ypbin.iot.core.i18n.IotMessageKeys;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.ProbeResult;
@@ -87,8 +88,12 @@ public abstract class BlockingProtocolAdapter implements ProtocolAdapter {
      * @return 探测结果
      */
     protected ProbeResult probeBlocking(ConnectionSpec spec, AdapterContext context) {
-        throw new UnsupportedOperationException(
-                "probeBlocking not implemented for " + descriptor().code());
+        ProtocolConnection connection = openBlocking(spec, context);
+        try {
+            return ProbeResult.reachable(descriptor(), connection.describe());
+        } finally {
+            connection.close();
+        }
     }
 
     @Override
@@ -104,7 +109,10 @@ public abstract class BlockingProtocolAdapter implements ProtocolAdapter {
 
     @Override
     public final CompletionStage<ProbeResult> probe(ConnectionSpec spec, AdapterContext context) {
-        return supplyAsync(context, () -> probeBlocking(spec, context));
+        // probe 永不异常完成：探测失败以 reachable=false 表达，避免宿主对着异常做流程控制
+        return Stages.normalize(supplyAsync(context, () -> probeBlocking(spec, context))
+                .exceptionally(error -> ProbeResult.unreachable(
+                        descriptor(), IotMessageKeys.CONNECTION_FAILED)));
     }
 
     private <T> CompletionStage<T> supplyAsync(AdapterContext context, Supplier<T> supplier) {

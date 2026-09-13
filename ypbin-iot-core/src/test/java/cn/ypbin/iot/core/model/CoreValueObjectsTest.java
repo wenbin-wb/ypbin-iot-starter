@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.ypbin.iot.core.context.LogLevel;
+import cn.ypbin.iot.core.exception.AddressParseException;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
@@ -71,13 +72,14 @@ class CoreValueObjectsTest {
     }
 
     @Test
-    @DisplayName("MODEL-03 Endpoint 对非法 URI 不得抛异常，而是返回空解析结果")
-    void endpointMustTolerateInvalidUri() {
-        Endpoint invalid = Endpoint.of("not a uri with spaces");
-        assertThat(invalid.scheme()).isEmpty();
-        assertThat(invalid.host()).isEmpty();
-        assertThat(invalid.port()).isEqualTo(Endpoint.NO_PORT);
-        assertThat(invalid.parameters()).isEmpty();
+    @DisplayName("MODEL-03 Endpoint 对非法 URI 必须构造期 fail-fast，不得静默接受")
+    void endpointMustRejectInvalidUri() {
+        // 静默接受非法 URI 会让 scheme()="" / port()=-1 一路传播到运行期，
+        // 表现为「配置错了但没人知道」；必须在构造期就暴露。
+        assertThatThrownBy(() -> Endpoint.of("not a uri with spaces"))
+                .isInstanceOf(AddressParseException.class);
+        assertThatThrownBy(() -> Endpoint.of("   "))
+                .isInstanceOf(AddressParseException.class);
     }
 
     @Test
@@ -200,7 +202,7 @@ class CoreValueObjectsTest {
         assertThat(CloseCause.fromCode(CloseCause.TIMEOUT.getCode())).contains(CloseCause.TIMEOUT);
         assertThat(DeviceEventType.fromCode(DeviceEventType.DEVICE_ONLINE.getCode()))
                 .contains(DeviceEventType.DEVICE_ONLINE);
-        assertThat(cn.ypbin.iot.core.context.LogLevel.fromCode(0))
+        assertThat(LogLevel.fromCode(0))
                 .contains(LogLevel.DEBUG);
     }
 

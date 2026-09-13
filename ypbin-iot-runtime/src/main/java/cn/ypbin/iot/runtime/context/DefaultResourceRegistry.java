@@ -19,6 +19,7 @@ import cn.ypbin.iot.core.context.ResourceRegistry;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +42,8 @@ public final class DefaultResourceRegistry implements ResourceRegistry {
 
     private final Deque<AutoCloseable> resources = new ArrayDeque<>();
 
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+
     private final ReentrantLock lock = new ReentrantLock();
 
     @Override
@@ -48,6 +51,12 @@ public final class DefaultResourceRegistry implements ResourceRegistry {
         Objects.requireNonNull(resource, "resource must not be null");
         lock.lock();
         try {
+            if (closed.get()) {
+                // 已关闭还注册会 push 进一个再无人 drain 的队列，等于永久泄漏：
+                // 立即关闭并显式报错，而不是静默接收
+                throw new IllegalStateException("resource registry already closed: "
+                        + resource.getClass().getName());
+            }
             resources.push(resource);
             return resource;
         } finally {
@@ -59,14 +68,16 @@ public final class DefaultResourceRegistry implements ResourceRegistry {
     public void unregister(AutoCloseable resource) {
         lock.lock();
         try {
-            resources.remove(resource);
+            // 按引用移除：Deque.remove(Object) 用 equals 语义，资源实现若按值相等会移错实例
+            resources.removeIf(candidate -> candidate == resource);
         } finally {
             lock.unlock();
         }
     }
 
-    /** 逆序释放全部资源；幂等。 */
+    /** 逆序释放全部资源；幂等。关闭后再 register 会抛 {@link IllegalStateException}。 */
     public void close() {
+        closed.set(true);
         while (true) {
             AutoCloseable resource;
             lock.lock();

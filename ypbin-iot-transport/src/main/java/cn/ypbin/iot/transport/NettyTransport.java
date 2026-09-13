@@ -109,6 +109,12 @@ public final class NettyTransport implements AutoCloseable {
      */
     public CompletionStage<NettyChannelConnection> connect(ConnectionSpec spec, Duration idleInterval) {
         Objects.requireNonNull(spec, "spec must not be null");
+        if (spec.tls().enabled()) {
+            // M0 尚未实现 TLS：必须显式失败，不得静默按明文建链——
+            // 「以为加密了」的错觉比直接报错危险得多。
+            return CompletableFuture.failedFuture(new ConnectionException(spec.connectionId(),
+                    IotMessageKeys.CONFIG_INVALID, "TLS not implemented in M0; refusing plaintext connect"));
+        }
         Endpoint endpoint = spec.endpoint();
         String host = endpoint.host();
         int port = endpoint.port();
@@ -122,7 +128,7 @@ public final class NettyTransport implements AutoCloseable {
                 .channel(NioSocketChannel.class)
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) spec.connectTimeout().toMillis())
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMillis(spec))
                 .handler(channelInitializer(spec, idleInterval, result));
         bootstrap.connect(new InetSocketAddress(host, port)).addListener(future -> {
             if (!future.isSuccess()) {
@@ -140,6 +146,17 @@ public final class NettyTransport implements AutoCloseable {
      */
     public FramingSpec framingSpec() {
         return framingSpec;
+    }
+
+    /**
+     * 连接超时的毫秒值。
+     *
+     * <p>刻意做边界裁剪：{@code (int) Duration.toMillis()} 在超大超时下会溢出成负数，
+     * 而 Netty 只对 {@code > 0} 的值排超时任务——溢出等于「无超时」，属静默失效。</p>
+     */
+    private static int connectTimeoutMillis(ConnectionSpec spec) {
+        long millis = spec.connectTimeout().toMillis();
+        return (int) Math.max(1L, Math.min(millis, Integer.MAX_VALUE));
     }
 
     @Override
@@ -177,6 +194,11 @@ public final class NettyTransport implements AutoCloseable {
         }
         if (spec.mode() == FramingMode.DELIMITER) {
             byte[] delimiter = spec.delimiter();
+            if (spec.maxFrameLength() < delimiter.length) {
+                // 先校验再分配：否则 DelimiterBasedFrameDecoder 构造抛异常会泄漏已分配的 direct 缓冲
+                throw new IllegalArgumentException("maxFrameLength(" + spec.maxFrameLength()
+                        + ") must be >= delimiter length(" + delimiter.length + ")");
+            }
             ByteBuf buffer = channel.alloc().buffer(delimiter.length);
             buffer.writeBytes(delimiter);
             channel.pipeline().addLast(new DelimiterBasedFrameDecoder(spec.maxFrameLength(), buffer));

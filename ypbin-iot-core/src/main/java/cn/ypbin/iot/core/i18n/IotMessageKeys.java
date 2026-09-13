@@ -66,6 +66,9 @@ public final class IotMessageKeys {
     /** 地址解析失败。 */
     public static final String ADDRESS_PARSE_FAILED = ADDRESS_PREFIX + "parse-failed";
 
+    /** 端点 URI 非法。 */
+    public static final String ENDPOINT_INVALID = ADDRESS_PREFIX + "invalid-endpoint";
+
     /** 能力不支持。 */
     public static final String CAPABILITY_UNSUPPORTED = CAPABILITY_PREFIX + "unsupported";
 

@@ -60,6 +60,9 @@ public final class DefaultTaskScheduler implements TaskScheduler, AutoCloseable 
 
     private static final String PLATFORM_THREAD_NAME = "ypbin-iot-platform-";
 
+    /** 常见现场物理资源数（串口 + CAN 通道）的经验下限，仅作为默认值参考。 */
+    private static final int DEFAULT_PHYSICAL_RESOURCE_HINT = 8;
+
     private final ScheduledExecutorService timer;
 
     private final ExecutorService virtualExecutor;
@@ -85,9 +88,14 @@ public final class DefaultTaskScheduler implements TaskScheduler, AutoCloseable 
                 new ThreadPoolExecutor.AbortPolicy());
     }
 
+    /**
+     * 平台线程池默认大小。
+     *
+     * <p>取「CPU 核数」与「常见物理资源数」的较大者：native 调用（串口/CAN/媒体）
+     * 的并发上限由物理资源决定，与 CPU 核数无关。</p>
+     */
     private static int defaultPlatformPoolSize() {
-        int ports = 8;
-        return Math.max(ports, Runtime.getRuntime().availableProcessors());
+        return Math.max(DEFAULT_PHYSICAL_RESOURCE_HINT, Runtime.getRuntime().availableProcessors());
     }
 
     @Override

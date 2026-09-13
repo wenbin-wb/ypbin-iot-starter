@@ -15,6 +15,7 @@
  */
 package cn.ypbin.iot.transport;
 
+import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.CloseCause;
 import cn.ypbin.iot.core.model.CloseReason;
 import cn.ypbin.iot.core.model.ConnectionSpec;
@@ -136,8 +137,9 @@ public final class NettyChannelConnection implements ProtocolConnection {
     public DeviceSession session() {
         DeviceSession current = session;
         if (current == null) {
-            throw new IllegalStateException("no device session bound to connection " + spec.connectionId()
-                    + "; call ProtocolAdapter.bind(...) first");
+            // 与 SPI 文档一致：未绑定属「能力尚不可用」，用 UnsupportedCapabilityException
+            throw new UnsupportedCapabilityException(spec.protocol(),
+                    "session (call ProtocolAdapter.bind first)");
         }
         return current;
     }

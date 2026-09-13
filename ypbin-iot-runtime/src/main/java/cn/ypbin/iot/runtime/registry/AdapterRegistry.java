@@ -149,6 +149,15 @@ public final class AdapterRegistry implements AutoCloseable {
             } catch (RuntimeException ex) {
                 log.error("[ypbin-iot] failed to close adapter {}", registration.adapter().getClass().getName(), ex);
             }
+            // 适配器级资源登记在上下文里，必须一并释放，否则「资源登记」这条能力形同虚设
+            if (registration.context() instanceof AutoCloseable closeable) {
+                try {
+                    closeable.close();
+                } catch (Exception ex) {
+                    log.error("[ypbin-iot] failed to close adapter context of {}",
+                            registration.descriptor().code(), ex);
+                }
+            }
         }
     }
 

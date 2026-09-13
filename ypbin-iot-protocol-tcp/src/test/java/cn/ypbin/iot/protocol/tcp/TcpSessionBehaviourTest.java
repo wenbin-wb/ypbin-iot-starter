@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.DataEgress;
+import cn.ypbin.iot.core.exception.ConnectionException;
+import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DataBatch;
 import cn.ypbin.iot.core.model.DataListener;
@@ -31,6 +33,7 @@ import cn.ypbin.iot.core.model.PointValue;
 import cn.ypbin.iot.core.model.PointWrite;
 import cn.ypbin.iot.core.model.SubscribeRequest;
 import cn.ypbin.iot.core.model.SubscriptionHandle;
+import cn.ypbin.iot.core.model.TlsOptions;
 import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
@@ -199,17 +202,33 @@ class TcpSessionBehaviourTest {
     }
 
     @Test
-    @DisplayName("TCP-06 未绑定会话的链路访问必须显式报错")
+    @DisplayName("TCP-06 未绑定会话的链路访问必须抛 UnsupportedCapabilityException")
     void unboundConnectionMustFailLoudly() {
         NettyChannelConnection connection = transport.connect(connectionSpec(), Duration.ZERO)
                 .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
         try {
             assertThatThrownBy(connection::session)
-                    .as("未 bind 就取会话必须显式报错，而不是返回 null")
-                    .isInstanceOf(IllegalStateException.class);
+                    .as("未 bind 就取会话必须按 SPI 契约抛 UnsupportedCapabilityException，而不是返回 null")
+                    .isInstanceOf(UnsupportedCapabilityException.class);
         } finally {
             connection.close();
         }
+    }
+
+    @Test
+    @DisplayName("TCP-07 TLS 未实现时必须 fail-fast，不得静默明文建链")
+    void tlsMustFailFastInsteadOfSilentPlaintext() {
+        ConnectionSpec tlsSpec = new ConnectionSpec("tcp-tls", CODE,
+                Endpoint.of("tcp://127.0.0.1:" + server.port()),
+                Duration.ofSeconds(3), Duration.ofSeconds(3), TlsOptions.enabledDefault(), null, Map.of());
+        Throwable error = transport.connect(tlsSpec, Duration.ZERO)
+                .toCompletableFuture()
+                .handle((connection, ex) -> ex)
+                .orTimeout(3, TimeUnit.SECONDS)
+                .join();
+        assertThat(error)
+                .as("配置了 TLS 却按明文连接是安全静默降级，必须显式失败")
+                .isInstanceOf(ConnectionException.class);
     }
 
     @Test
