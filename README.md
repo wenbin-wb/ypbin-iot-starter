@@ -3,8 +3,17 @@
 > 多协议物联网接入框架 Spring Boot Starter —— **JDK 21 · Spring Boot 4.1 · Netty 4.1**
 > 目标：单机 10 万连接，集群千万级。
 
-> **当前状态：设计阶段（Design Phase）**。本仓已完成架构设计与 SPI 契约定义，
-> 代码骨架尚未落地。文档见下方[设计文档](#设计文档)。
+> **当前状态：M0 骨架已完成（2026-09-13）**。
+> 10 个模块 `mvn clean test` 全绿，**107 个测试用例**，覆盖率 core 84.2% / runtime 82.4% /
+> protocol-tcp 86.0% / starter 92.4%（母仓门禁 80%，未下调）。
+>
+> **已实现**：`iot-core`（契约层，零 Spring/零 Netty）· `iot-runtime`（单飞建链连接复用、微批出口、
+> 双执行器调度）· `iot-transport`（Netty 底座）· `iot-spring-boot-starter`（条件装配 + 生命周期编排）·
+> `iot-protocol-tcp`（通用 TCP 透传，M0 验收载体）· `iot-test`（TCK 一致性测试套件）·
+> `iot-architecture-tests`（ArchUnit 约束，**含规则有效性自检**）。
+>
+> **下一步**：M1 核心档三协议（Modbus TCP/RTU · OPC UA · MQTT），路线图见
+> [选型文档 §7](./docs/PROTOCOLS.md#71-分批策略d5范围收敛可验证性优先)。
 
 ---
 
