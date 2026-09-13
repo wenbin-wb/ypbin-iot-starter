@@ -130,7 +130,8 @@ public final class ConnectionRegistry implements AutoCloseable {
     private CompletionStage<ConnectionHandle> acquireAttempt(ProtocolAdapter adapter, ConnectionSpec spec,
             AdapterContext context, String key, int remainingAttempts) {
         CompletableFuture<Entry> fresh = new CompletableFuture<>();
-        CompletableFuture<Entry> target;
+        CompletableFuture<Entry> target = null;
+        boolean staleFailure = false;
         lifecycle.readLock().lock();
         try {
             if (closed) {
@@ -138,7 +139,14 @@ public final class ConnectionRegistry implements AutoCloseable {
             }
             CompletableFuture<Entry> existing = entries.putIfAbsent(key, fresh);
             if (existing != null) {
-                target = existing;
+                if (existing.isCompletedExceptionally()) {
+                    // 陈旧失败条目：摘除后重试。
+                    // 不摘除会永久残留（activeCount 偏大）；不重试会让新调用者继承上一次的失败。
+                    entries.remove(key, existing);
+                    staleFailure = true;
+                } else {
+                    target = existing;
+                }
             } else if (entries.size() > maxConnections) {
                 // 关键：拒绝路径也必须完成 fresh，否则已挂到它上面的并发调用者会永久挂起
                 entries.remove(key, fresh);
@@ -151,6 +159,13 @@ public final class ConnectionRegistry implements AutoCloseable {
             }
         } finally {
             lifecycle.readLock().unlock();
+        }
+        if (staleFailure) {
+            if (remainingAttempts <= 0) {
+                return Stages.failed(new ConnectionException(key, IotMessageKeys.CONNECTION_FAILED,
+                        "acquire retries exhausted"));
+            }
+            return acquireAttempt(adapter, spec, context, key, remainingAttempts - 1);
         }
         if (remainingAttempts <= 0) {
             return Stages.failed(new ConnectionException(key, IotMessageKeys.CONNECTION_FAILED,

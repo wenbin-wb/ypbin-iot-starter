@@ -54,7 +54,7 @@ class EgressRouterTest {
         RecordingSink first = new RecordingSink("first");
         RecordingSink second = new RecordingSink("second");
         try (EgressRouter router = new EgressRouter(100, 10_000, EgressOverflowPolicy.DROP_OLDEST,
-                Duration.ofMillis(100), List.of(first, second), List.of(), Clock.systemUTC())) {
+                Duration.ofMillis(100), Duration.ofMillis(20), List.of(first, second), List.of(), Clock.systemUTC())) {
             router.emit(batch("d1", 3));
             awaitPoints(router, 3);
             assertThat(first.points()).isEqualTo(3);
@@ -68,7 +68,7 @@ class EgressRouterTest {
     void failingSinkMustNotBlockOthers() {
         RecordingSink healthy = new RecordingSink("healthy");
         try (EgressRouter router = new EgressRouter(100, 10_000, EgressOverflowPolicy.DROP_OLDEST,
-                Duration.ofMillis(100), List.of(new FailingSink(), healthy), List.of(),
+                Duration.ofMillis(100), Duration.ofMillis(20), List.of(new FailingSink(), healthy), List.of(),
                 Clock.systemUTC())) {
             router.emit(batch("d1", 2));
             awaitPoints(router, 2);
@@ -81,8 +81,8 @@ class EgressRouterTest {
     @DisplayName("EGRESS-03 队列溢出必须丢弃并计数，不得静默")
     void overflowMustBeCounted() {
         SlowSink slow = new SlowSink();
-        try (EgressRouter router = new EgressRouter(10, 5, EgressOverflowPolicy.DROP_OLDEST,
-                Duration.ofMillis(50), List.of(slow), List.of(), Clock.systemUTC())) {
+        try (EgressRouter router = new EgressRouter(4, 5, EgressOverflowPolicy.DROP_OLDEST,
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(slow), List.of(), Clock.systemUTC())) {
             for (int i = 0; i < 20; i++) {
                 router.emit(batch("d" + i, 5));
             }
@@ -96,8 +96,8 @@ class EgressRouterTest {
     @DisplayName("EGRESS-04 DROP_NEWEST 策略下新数据被拒并计数")
     void dropNewestMustRejectIncoming() {
         SlowSink slow = new SlowSink();
-        try (EgressRouter router = new EgressRouter(10, 5, EgressOverflowPolicy.DROP_NEWEST,
-                Duration.ofMillis(50), List.of(slow), List.of(), Clock.systemUTC())) {
+        try (EgressRouter router = new EgressRouter(4, 5, EgressOverflowPolicy.DROP_NEWEST,
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(slow), List.of(), Clock.systemUTC())) {
             for (int i = 0; i < 10; i++) {
                 router.emit(batch("d" + i, 5));
             }
@@ -110,7 +110,7 @@ class EgressRouterTest {
     void emptyBatchMustBeIgnored() {
         RecordingSink sink = new RecordingSink("sink");
         try (EgressRouter router = new EgressRouter(100, 1000, EgressOverflowPolicy.DROP_OLDEST,
-                Duration.ofMillis(50), List.of(sink), List.of(), Clock.systemUTC())) {
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(sink), List.of(), Clock.systemUTC())) {
             router.emit(new DataBatch("d1", CODE, "c1", Instant.now(), List.of()));
             assertThat(sink.points()).isZero();
             assertThat(router.deliveredBatches()).isZero();
@@ -122,7 +122,7 @@ class EgressRouterTest {
     void deviceEventMustReachListener() {
         RecordingListener listener = new RecordingListener();
         try (EgressRouter router = new EgressRouter(100, 1000, EgressOverflowPolicy.DROP_OLDEST,
-                Duration.ofMillis(50), List.of(), List.of(listener), Clock.systemUTC())) {
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(), List.of(listener), Clock.systemUTC())) {
             router.emit(DeviceEvent.of("d1", CODE, DeviceEventType.DEVICE_ONLINE, "iot.test", Instant.now()));
             assertThat(listener.events()).isEqualTo(1);
         }
@@ -133,7 +133,7 @@ class EgressRouterTest {
     void closeMustFlushRemaining() {
         RecordingSink sink = new RecordingSink("sink");
         EgressRouter router = new EgressRouter(1000, 10_000, EgressOverflowPolicy.DROP_OLDEST,
-                Duration.ofMillis(50), List.of(sink), List.of(), Clock.systemUTC());
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(sink), List.of(), Clock.systemUTC());
         router.emit(batch("d1", 4));
         router.close();
         assertThat(sink.points()).as("关闭后剩余数据必须被 flush，不能丢在内存里").isEqualTo(4);

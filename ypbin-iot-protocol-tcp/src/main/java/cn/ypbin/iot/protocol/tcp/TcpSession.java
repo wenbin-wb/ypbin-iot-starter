@@ -148,36 +148,59 @@ public final class TcpSession implements DeviceSession {
         Instant started = context.clock().instant();
         CompletableFuture<WriteResult> result = new CompletableFuture<>();
         List<PointWriteStatus> statuses = new ArrayList<>();
-        writeSequentially(request.writes(), 0, statuses, started, result);
+        advanceWrites(request.writes(), 0, statuses, started, result);
         return result;
     }
 
-    private void writeSequentially(List<PointWrite> writes, int index, List<PointWriteStatus> statuses,
+    /**
+     * 顺序推进写列表。
+     *
+     * <p><b>刻意不写成「每次递归推进一条」</b>：那样在两种情况下会同步递归——
+     * ① 载荷编码失败（纯同步分支）；② {@code connection.write} 对空载荷返回<b>已完成</b>的 Future
+     * 时 {@code whenComplete} 内联执行。批量写几万条即触发 {@code StackOverflowError}，
+     * 且是从 SPI 同步抛出而非返回失败 Stage。</p>
+     *
+     * <p>这里改为「同步可推进就继续循环、遇到真正异步才注册回调并返回」，
+     * 调用栈深度与在途请求数同阶，而非与写条目数同阶。</p>
+     */
+    private void advanceWrites(List<PointWrite> writes, int startIndex, List<PointWriteStatus> statuses,
             Instant started, CompletableFuture<WriteResult> result) {
-        if (index >= writes.size()) {
-            result.complete(new WriteResult(statuses, Duration.between(started, context.clock().instant())));
-            return;
-        }
-        PointWrite write = writes.get(index);
-        TcpPayloadCodec.Encoded encoded = TcpPayloadCodec.encode(write.value());
-        if (!encoded.success()) {
-            statuses.add(PointWriteStatus.fail(write.address(), encoded.messageKey()));
-            context.metrics().recordWrite(Duration.ZERO, false);
-            writeSequentially(writes, index + 1, statuses, started, result);
-            return;
-        }
-        connection.write(encoded.payload()).whenComplete((ignored, error) -> {
-            if (error == null) {
-                statuses.add(PointWriteStatus.ok(write.address()));
-                context.metrics().recordWrite(Duration.ZERO, true);
-            } else {
-                statuses.add(PointWriteStatus.fail(write.address(), TcpAdapter.MSG_WRITE_FAILED));
+        int index = startIndex;
+        while (index < writes.size()) {
+            PointWrite write = writes.get(index);
+            TcpPayloadCodec.Encoded encoded = TcpPayloadCodec.encode(write.value());
+            if (!encoded.success()) {
+                statuses.add(PointWriteStatus.fail(write.address(), encoded.messageKey()));
                 context.metrics().recordWrite(Duration.ZERO, false);
-                context.log(LogLevel.WARN, TcpAdapter.MSG_WRITE_FAILED,
-                        device.deviceId());
+                index++;
+                continue;
             }
-            writeSequentially(writes, index + 1, statuses, started, result);
-        });
+            CompletableFuture<Void> pending = connection.write(encoded.payload()).toCompletableFuture();
+            if (pending.isDone()) {
+                // 已同步完成：继续用循环推进，避免回调内联递归
+                recordStatus(write, pending.isCompletedExceptionally(), statuses);
+                index++;
+                continue;
+            }
+            int next = index + 1;
+            pending.whenComplete((ignored, error) -> {
+                recordStatus(write, error != null, statuses);
+                advanceWrites(writes, next, statuses, started, result);
+            });
+            return;
+        }
+        result.complete(new WriteResult(statuses, Duration.between(started, context.clock().instant())));
+    }
+
+    private void recordStatus(PointWrite write, boolean failed, List<PointWriteStatus> statuses) {
+        if (failed) {
+            statuses.add(PointWriteStatus.fail(write.address(), TcpAdapter.MSG_WRITE_FAILED));
+            context.metrics().recordWrite(Duration.ZERO, false);
+            context.log(LogLevel.WARN, TcpAdapter.MSG_WRITE_FAILED, device.deviceId());
+            return;
+        }
+        statuses.add(PointWriteStatus.ok(write.address()));
+        context.metrics().recordWrite(Duration.ZERO, true);
     }
 
     @Override

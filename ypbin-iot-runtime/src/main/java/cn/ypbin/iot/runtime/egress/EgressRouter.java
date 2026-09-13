@@ -67,6 +67,9 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
     /** 单次消费最多合并的批次数。 */
     private static final int MAX_COALESCE_BATCHES = 64;
 
+    /** 丢弃日志的最小间隔：避免过载时日志风暴打死事件循环。 */
+    private static final long DROP_LOG_INTERVAL_NANOS = Duration.ofSeconds(1).toNanos();
+
     private final int batchSize;
 
     private final int queueCapacityPoints;
@@ -74,6 +77,9 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
     private final EgressOverflowPolicy overflowPolicy;
 
     private final Duration blockTimeout;
+
+    /** 消费线程的 drain 等待窗口，来自 {@code ypbin.iot.egress.batch-interval}。 */
+    private final Duration batchInterval;
 
     private final List<DataSink> sinks;
 
@@ -91,6 +97,10 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
 
     private final AtomicLong sinkFailures = new AtomicLong();
 
+    private final AtomicLong lastDropLogNanos = new AtomicLong(0L);
+
+    private final AtomicLong lastLoggedDropped = new AtomicLong(0L);
+
     private final AtomicBoolean running = new AtomicBoolean(true);
 
     private final Thread dispatcher;
@@ -107,11 +117,19 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
      * @param clock              时钟
      */
     public EgressRouter(int batchSize, int queueCapacityPoints, EgressOverflowPolicy overflowPolicy,
-            Duration blockTimeout, List<DataSink> sinks, List<DeviceEventListener> listeners, Clock clock) {
+            Duration blockTimeout, Duration batchInterval, List<DataSink> sinks,
+            List<DeviceEventListener> listeners, Clock clock) {
         this.batchSize = batchSize <= 0 ? 1000 : batchSize;
         this.queueCapacityPoints = queueCapacityPoints <= 0 ? 100_000 : queueCapacityPoints;
         this.overflowPolicy = overflowPolicy == null ? EgressOverflowPolicy.DROP_OLDEST : overflowPolicy;
         this.blockTimeout = blockTimeout == null ? Duration.ofSeconds(1) : blockTimeout;
+        this.batchInterval = batchInterval == null || batchInterval.isNegative() || batchInterval.isZero()
+                ? Duration.ofMillis(200) : batchInterval;
+        if (queueCapacityPoints > 0 && queueCapacityPoints < this.batchSize) {
+            // 否则单批就可能超过队列容量：DROP_OLDEST 会把整个队列清空再丢掉新批次（等于全丢）
+            throw new IllegalArgumentException("queueCapacityPoints(" + queueCapacityPoints
+                    + ") must be >= batchSize(" + this.batchSize + ")");
+        }
         this.sinks = sinks == null ? List.of() : List.copyOf(sinks);
         this.listeners = listeners == null ? List.of() : List.copyOf(listeners);
         this.clock = clock == null ? Clock.systemUTC() : clock;
@@ -131,6 +149,15 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
             return;
         }
         int points = batch.size();
+        if (!running.get()) {
+            // 关闭后入队的数据永远无人投递：必须显式计数，不能静默留在队列里
+            drop(points, "router already closed");
+            return;
+        }
+        if (points > queueCapacityPoints) {
+            drop(points, "batch larger than queue capacity");
+            return;
+        }
         if (!reserve(points)) {
             return;
         }
@@ -199,6 +226,12 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             log.warn("[ypbin-iot] interrupted while waiting for egress dispatcher to stop", ex);
+        }
+        if (dispatcher.isAlive()) {
+            // dispatcher 仍在写 Sink：此时关 Sink 会造成 use-after-close，宁可泄漏也不破坏语义
+            log.warn("[ypbin-iot] egress dispatcher still alive after timeout; skipping sink close "
+                    + "to avoid concurrent write and close on the same sink.");
+            return;
         }
         // 停机时把队列剩余数据交给 Sink，避免丢在内存里；剩余部分显式计数
         List<DataBatch> remaining = new ArrayList<>();
@@ -270,15 +303,27 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
         return true;
     }
 
+    /**
+     * 记录丢弃。
+     *
+     * <p><b>必须限流</b>：过载时 {@code drop} 是在业务线程（可能是 Netty EventLoop）上同步调用的，
+     * 每条都打日志会先于背压本身把事件循环打死。</p>
+     */
     private void drop(int points, String reason) {
         long total = droppedPoints.addAndGet(points);
-        log.warn("[ypbin-iot] dropped {} points ({}); total dropped={}", points, reason, total);
+        long now = System.nanoTime();
+        long last = lastDropLogNanos.get();
+        if (now - last >= DROP_LOG_INTERVAL_NANOS && lastDropLogNanos.compareAndSet(last, now)) {
+            long delta = total - lastLoggedDropped.getAndSet(total);
+            log.warn("[ypbin-iot] dropped {} points this window ({}); total dropped={}",
+                    delta, reason, total);
+        }
     }
 
     private void dispatchLoop() {
         while (running.get()) {
             try {
-                DataBatch first = queue.poll(200L, TimeUnit.MILLISECONDS);
+                DataBatch first = queue.poll(batchInterval.toMillis(), TimeUnit.MILLISECONDS);
                 if (first == null) {
                     continue;
                 }

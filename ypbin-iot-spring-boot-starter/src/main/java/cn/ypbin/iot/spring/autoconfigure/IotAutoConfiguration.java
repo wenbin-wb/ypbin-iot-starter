@@ -94,7 +94,7 @@ public class IotAutoConfiguration {
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     public DataEgress iotDataEgress(IotProperties properties, ObjectProvider<DataSink> sinks,
-            ObjectProvider<DeviceEventListener> listeners) {
+            ObjectProvider<DeviceEventListener> listeners, Clock clock) {
         IotProperties.EgressProperties egress = properties.egress();
         List<DataSink> sinkList = sinks.orderedStream().toList();
         List<DeviceEventListener> listenerList = listeners.orderedStream().toList();
@@ -104,7 +104,7 @@ public class IotAutoConfiguration {
         }
         log.debug("[ypbin-iot] iotDataEgress configured with {} sink(s).", sinkList.size());
         return new EgressRouter(egress.batchSize(), egress.queueCapacity(), egress.overflowPolicy(),
-                egress.blockTimeout(), sinkList, listenerList, Clock.systemUTC());
+                egress.blockTimeout(), egress.batchInterval(), sinkList, listenerList, clock);
     }
 
     /**
