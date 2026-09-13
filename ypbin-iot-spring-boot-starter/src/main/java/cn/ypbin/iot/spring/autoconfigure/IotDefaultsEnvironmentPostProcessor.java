@@ -62,7 +62,13 @@ public class IotDefaultsEnvironmentPostProcessor implements EnvironmentPostProce
         }
         Map<String, Object> defaults = new LinkedHashMap<>();
         defaults.put(MESSAGES_BASENAME_KEY, mergedBasename(environment.getProperty(MESSAGES_BASENAME_KEY)));
-        environment.getPropertySources().addLast(new MapPropertySource(PROPERTY_SOURCE_NAME, defaults));
+        // 注意这里是 addFirst 而不是 addLast：
+        // 本处理器做的是「在原值基础上追加」（append），必须让「合并后的值」生效；
+        // 若用 addLast，用户已配置的原值优先级更高，合并结果永远不会被读到。
+        // 合并值本身是从用户配置推导出来的，因此不存在覆盖用户意图的问题。
+        // （母仓的同类处理器用 addLast 是因为它注入的是纯默认值，只在缺失时生效，语义不同。）
+        environment.getPropertySources().addFirst(
+                new MapPropertySource(PROPERTY_SOURCE_NAME, defaults));
     }
 
     @Override
