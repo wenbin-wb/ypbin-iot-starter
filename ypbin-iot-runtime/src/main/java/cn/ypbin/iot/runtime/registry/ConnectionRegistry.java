@@ -129,6 +129,12 @@ public final class ConnectionRegistry implements AutoCloseable {
 
     private CompletionStage<ConnectionHandle> acquireAttempt(ProtocolAdapter adapter, ConnectionSpec spec,
             AdapterContext context, String key, int remainingAttempts) {
+        // 必须放在方法入口：若放在插入/建链之后，重试耗尽的最后一次会真的建出链路并入表，
+        // 却立刻返回失败且永不 tryRetain → 该条目的 refCount 恒为 0、不排空闲回收 → 永久孤儿连接。
+        if (remainingAttempts <= 0) {
+            return Stages.failed(new ConnectionException(key, IotMessageKeys.CONNECTION_FAILED,
+                    "acquire retries exhausted"));
+        }
         CompletableFuture<Entry> fresh = new CompletableFuture<>();
         CompletableFuture<Entry> target = null;
         boolean staleFailure = false;
@@ -161,15 +167,7 @@ public final class ConnectionRegistry implements AutoCloseable {
             lifecycle.readLock().unlock();
         }
         if (staleFailure) {
-            if (remainingAttempts <= 0) {
-                return Stages.failed(new ConnectionException(key, IotMessageKeys.CONNECTION_FAILED,
-                        "acquire retries exhausted"));
-            }
             return acquireAttempt(adapter, spec, context, key, remainingAttempts - 1);
-        }
-        if (remainingAttempts <= 0) {
-            return Stages.failed(new ConnectionException(key, IotMessageKeys.CONNECTION_FAILED,
-                    "acquire retries exhausted"));
         }
         return target.thenCompose(entry -> {
             if (entry == null) {
@@ -260,7 +258,10 @@ public final class ConnectionRegistry implements AutoCloseable {
         try {
             openCount.incrementAndGet();
             stage = adapter.open(spec, context);
-        } catch (RuntimeException ex) {
+        } catch (Throwable ex) {
+            // 必须捕获 Throwable：只捕 RuntimeException 时，适配器抛 Error（如 NoClassDefFoundError）
+            // 会让 fresh 永不完成、条目永久留在表中 → 等待者挂起且 closeAll 永不完成。
+            // 这里不吞掉：异常被完整记录并交付给等待者。
             failFresh(key, fresh, ex);
             return;
         }

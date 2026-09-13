@@ -205,6 +205,85 @@ class IotLifecycleTest {
         assertThat(lifecycle.sessionCount()).as("第二个来源的设备仍应被接入").isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("LIFE-09 bind 失败必须归还链路引用，不得让配额永久泄漏")
+    void failedBindMustReleaseConnectionHandle() {
+        adapter.failBind = true;
+        IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
+                List.of(new StubDeviceRegistry(ValidationResult.ok())),
+                List.of(new StubSpecProvider(true)), properties);
+        assertThat(lifecycle.bind(device())).isFalse();
+        assertThat(lifecycle.sessionCount()).isZero();
+        // 归还引用后空闲回收才能生效：把超时压到很小再验证链路被回收
+        ConnectionRegistry shortIdle = new ConnectionRegistry(Duration.ofMillis(30), 100, scheduler,
+                Clock.systemUTC());
+        IotLifecycle second = new IotLifecycle(adapterRegistry, shortIdle,
+                List.of(new StubDeviceRegistry(ValidationResult.ok())),
+                List.of(new StubSpecProvider(true)), properties);
+        assertThat(second.bind(device())).isFalse();
+        awaitUntil(() -> shortIdle.activeCount() == 0, Duration.ofSeconds(3));
+        assertThat(shortIdle.activeCount())
+                .as("bind 失败未归还引用时，连接会一直留在注册表里（配额泄漏）")
+                .isZero();
+        second.close();
+        lifecycle.close();
+    }
+
+    @Test
+    @DisplayName("LIFE-10 close 之后不得再接受绑定")
+    void bindAfterCloseMustBeRejected() {
+        IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
+                List.of(), List.of(new StubSpecProvider(true)), properties);
+        lifecycle.close();
+        assertThat(lifecycle.bind(device()))
+                .as("关闭后仍接受绑定会让新链路永久无人释放")
+                .isFalse();
+        assertThat(lifecycle.sessionCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("LIFE-11 设备变更通道必须已接线（ADD 生效、REMOVE 解绑、重复 revision 幂等）")
+    void deviceChangeChannelMustBeWired() {
+        StubDeviceRegistry registry = new StubDeviceRegistry(ValidationResult.ok());
+        IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
+                List.of(registry), List.of(new StubSpecProvider(true)), properties);
+        lifecycle.onApplicationEvent(null);
+        assertThat(registry.listener)
+                .as("框架必须在启动后注册变更监听器，否则运行期增删设备完全无效")
+                .isNotNull();
+
+        String firstSession = lifecycle.sessions().get("d1").sessionId();
+        // 重复 revision 必须被丢弃（幂等）
+        registry.listener.accept(new DeviceChange(ChangeType.UPDATE, device(), 1L));
+        assertThat(lifecycle.sessions().get("d1").sessionId())
+                .as("重复 revision 不得触发重绑").isEqualTo(firstSession);
+
+        // 更大 revision 触发「先解绑再绑定」，会话必须被替换
+        registry.listener.accept(new DeviceChange(ChangeType.UPDATE, device(), 2L));
+        assertThat(lifecycle.sessionCount()).isEqualTo(1);
+        assertThat(adapter.lastConnection()).isNotNull();
+
+        // REMOVE 必须解绑
+        registry.listener.accept(new DeviceChange(ChangeType.REMOVE, device(), 3L));
+        assertThat(lifecycle.sessionCount()).as("REMOVE 必须解绑设备").isZero();
+        lifecycle.close();
+    }
+
+    private static void awaitUntil(java.util.function.BooleanSupplier condition, Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            try {
+                Thread.sleep(10L);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
     private static DeviceSpec device() {
         return new DeviceSpec("d1", "设备", CODE, CONNECTION_ID, "", Duration.ZERO, Map.of());
     }
@@ -224,6 +303,8 @@ class IotLifecycleTest {
 
         private final ValidationResult validation;
 
+        private Consumer<DeviceChange> listener;
+
         private StubDeviceRegistry(ValidationResult validation) {
             this.validation = validation;
         }
@@ -240,7 +321,8 @@ class IotLifecycleTest {
 
         @Override
         public void addChangeListener(Consumer<DeviceChange> listener) {
-            listener.accept(new DeviceChange(ChangeType.ADD, device(), 1L));
+            // 只保存引用：由测试显式投递变更，避免「注册即回调」干扰启动流程
+            this.listener = listener;
         }
     }
 
@@ -300,6 +382,8 @@ class IotLifecycleTest {
 
         private volatile StubConnection lastConnection;
 
+        private boolean failBind;
+
         @Override
         public ProtocolDescriptor descriptor() {
             return DESCRIPTOR;
@@ -315,6 +399,9 @@ class IotLifecycleTest {
         @Override
         public CompletionStage<DeviceSession> bind(ProtocolConnection connection, DeviceSpec device,
                 AdapterContext context) {
+            if (failBind) {
+                return CompletableFuture.failedFuture(new IllegalStateException("bind failure by design"));
+            }
             StubSession session = new StubSession(device, connection);
             ((StubConnection) connection).attach(session);
             return CompletableFuture.completedFuture(session);

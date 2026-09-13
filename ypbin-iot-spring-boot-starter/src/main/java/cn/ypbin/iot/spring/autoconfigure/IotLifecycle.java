@@ -21,18 +21,23 @@ import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.ProbeResult;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolAdapter;
+import cn.ypbin.iot.core.spi.ChangeType;
 import cn.ypbin.iot.core.spi.ConnectionSpecProvider;
+import cn.ypbin.iot.core.spi.DeviceChange;
 import cn.ypbin.iot.core.spi.DeviceRegistry;
 import cn.ypbin.iot.core.spi.ValidationResult;
 import cn.ypbin.iot.runtime.registry.AdapterRegistry;
 import cn.ypbin.iot.runtime.registry.ConnectionRegistry;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -57,6 +62,9 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
 
     private static final Logger log = LoggerFactory.getLogger(IotLifecycle.class);
 
+    /** 单次绑定/解绑的等待上限：没有超时的 join 会让容器启动或停机被一条挂死链路永久阻塞。 */
+    private static final Duration BIND_TIMEOUT = Duration.ofSeconds(10);
+
     private final AdapterRegistry adapterRegistry;
 
     private final ConnectionRegistry connectionRegistry;
@@ -70,6 +78,12 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
     private final Map<String, DeviceSession> sessions = new ConcurrentHashMap<>();
 
     private final Map<String, ConnectionRegistry.ConnectionHandle> handles = new ConcurrentHashMap<>();
+
+    /** 设备级排他锁：保证同一设备的变更不会产生「新旧会话双活」。 */
+    private final Map<String, ReentrantLock> deviceLocks = new ConcurrentHashMap<>();
+
+    /** 已应用的配置版本号，用于变更幂等（消息总线可能 at-least-once 重复投递）。 */
+    private final Map<String, Long> appliedRevisions = new ConcurrentHashMap<>();
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -106,6 +120,8 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         for (DeviceRegistry registry : deviceRegistries) {
             try {
                 devices.addAll(registry.loadAll());
+                // 接线变更通道：不注册监听器会让运行期增删改设备完全无效（且毫无提示）
+                registry.addChangeListener(this::onDeviceChange);
             } catch (RuntimeException ex) {
                 log.error("[ypbin-iot] failed to load devices from registry {}",
                         registry.getClass().getName(), ex);
@@ -131,6 +147,10 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
      * @return 成功返回 {@code true}
      */
     public boolean bind(DeviceSpec device) {
+        if (closed.get()) {
+            log.warn("[ypbin-iot] lifecycle already closed; refusing to bind device {}", device.deviceId());
+            return false;
+        }
         Optional<ProtocolAdapter> adapterOptional = adapterRegistry.find(device.protocol());
         Optional<AdapterContext> contextOptional = adapterRegistry.contextOf(device.protocol());
         if (adapterOptional.isEmpty() || contextOptional.isEmpty()) {
@@ -153,13 +173,26 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         ProtocolAdapter adapter = adapterOptional.get();
         AdapterContext context = contextOptional.get();
         try {
+            // 同一设备重复绑定：先释放旧会话与旧引用，否则旧引用永不归还、连接只增不减
+            unbind(device.deviceId());
             ConnectionRegistry.ConnectionHandle handle = connectionRegistry
                     .acquire(adapter, specOptional.get(), context)
                     .toCompletableFuture()
+                    .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
                     .join();
-            DeviceSession session = adapter.bind(handle.connection(), device, context)
-                    .toCompletableFuture()
-                    .join();
+            DeviceSession session;
+            try {
+                session = adapter.bind(handle.connection(), device, context)
+                        .toCompletableFuture()
+                        .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                        .join();
+            } catch (RuntimeException ex) {
+                // 绑定失败必须归还链路引用：否则引用计数永不为零、空闲回收永不触发、配额泄漏
+                handle.release();
+                log.error("[ypbin-iot] bind failed for device {}; connection released to avoid quota leak",
+                        device.deviceId(), ex);
+                return false;
+            }
             sessions.put(device.deviceId(), session);
             handles.put(device.deviceId(), handle);
             log.debug("[ypbin-iot] device {} bound to session {}.", device.deviceId(), session.sessionId());
@@ -167,6 +200,65 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         } catch (RuntimeException ex) {
             log.error("[ypbin-iot] failed to bind device {}", device.deviceId(), ex);
             return false;
+        }
+    }
+
+    /**
+     * 解绑设备并归还链路引用；幂等。
+     *
+     * @param deviceId 设备标识
+     * @return 此前存在绑定或句柄则返回 {@code true}
+     */
+    public boolean unbind(String deviceId) {
+        DeviceSession session = sessions.remove(deviceId);
+        ConnectionRegistry.ConnectionHandle handle = handles.remove(deviceId);
+        if (session != null) {
+            session.close().toCompletableFuture()
+                    .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    .exceptionally(ex -> {
+                        log.error("[ypbin-iot] failed to close session of device {}", deviceId, ex);
+                        return null;
+                    })
+                    .join();
+        }
+        if (handle != null) {
+            handle.release();
+        }
+        return session != null || handle != null;
+    }
+
+    /**
+     * 处理设备配置变更。
+     *
+     * <p>幂等：{@code revision} 不大于已应用值时直接丢弃。同一设备的变更按设备级锁串行，
+     * 且统一走「先解绑再绑定」，避免切换窗口内出现新旧会话双活。</p>
+     *
+     * @param change 变更事件
+     */
+    public void onDeviceChange(DeviceChange change) {
+        String deviceId = change.device().deviceId();
+        ReentrantLock deviceLock = deviceLocks.computeIfAbsent(deviceId, ignored -> new ReentrantLock());
+        deviceLock.lock();
+        try {
+            long applied = appliedRevisions.getOrDefault(deviceId, Long.MIN_VALUE);
+            if (change.revision() <= applied) {
+                log.debug("[ypbin-iot] stale device change ignored: device={} revision={} applied={}",
+                        deviceId, change.revision(), applied);
+                return;
+            }
+            appliedRevisions.put(deviceId, change.revision());
+            if (change.type() == ChangeType.REMOVE) {
+                unbind(deviceId);
+                deviceLocks.remove(deviceId);
+                appliedRevisions.remove(deviceId);
+                return;
+            }
+            if (!bind(change.device())) {
+                log.warn("[ypbin-iot] device change not applied: device={} type={}",
+                        deviceId, change.type());
+            }
+        } finally {
+            deviceLock.unlock();
         }
     }
 
@@ -209,17 +301,11 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        sessions.forEach((deviceId, session) -> futures.add(
-                session.close().toCompletableFuture().exceptionally(ex -> {
-                    log.error("[ypbin-iot] failed to close session of device {}", deviceId, ex);
-                    return null;
-                })));
-        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
-        sessions.clear();
-        handles.values().forEach(ConnectionRegistry.ConnectionHandle::release);
-        handles.clear();
-        log.debug("[ypbin-iot] lifecycle closed, {} session(s) released.", futures.size());
+        int count = sessions.size();
+        for (String deviceId : new ArrayList<>(sessions.keySet())) {
+            unbind(deviceId);
+        }
+        log.debug("[ypbin-iot] lifecycle closed, {} session(s) released.", count);
     }
 
     private Optional<ConnectionSpec> resolveSpec(String connectionId) {

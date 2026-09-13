@@ -57,7 +57,12 @@ public record Endpoint(String uri) {
             throw new AddressParseException(null, uri, "endpoint uri must not be blank");
         }
         try {
-            new URI(uri);
+            URI parsed = new URI(uri);
+            if (parsed.getScheme() == null) {
+                // 仅校验语法不够："garbage" 与 "/dev/ttyS0" 都是合法相对 URI，
+                // 但作为端点它们没有承载协议，接受下来会表现为 scheme()="" / port()=-1 的静默形态。
+                throw new AddressParseException(null, uri, "endpoint requires a scheme, e.g. tcp://host:port");
+            }
         } catch (URISyntaxException ex) {
             throw new AddressParseException(null, uri, ex.getReason());
         }

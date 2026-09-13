@@ -42,7 +42,7 @@ import org.slf4j.LoggerFactory;
  * @author wenbin
  * @since 2026-09-13
  */
-public final class DefaultAdapterContext implements AdapterContext {
+public final class DefaultAdapterContext implements AdapterContext, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultAdapterContext.class);
 
@@ -156,7 +156,8 @@ public final class DefaultAdapterContext implements AdapterContext {
         }
     }
 
-    /** 释放适配器级资源。 */
+    /** 释放适配器级资源（实现 {@link AutoCloseable}，便于 {@code AdapterRegistry} 统一收口）。 */
+    @Override
     public void close() {
         ((DefaultResourceRegistry) resources).close();
     }
