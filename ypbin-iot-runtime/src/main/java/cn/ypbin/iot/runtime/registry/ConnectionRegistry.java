@@ -22,6 +22,7 @@ import cn.ypbin.iot.core.i18n.IotMessageKeys;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.protocol.ProtocolAdapter;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
+import cn.ypbin.iot.core.util.Stages;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -113,8 +114,7 @@ public final class ConnectionRegistry implements AutoCloseable {
         Objects.requireNonNull(spec, "spec must not be null");
         Objects.requireNonNull(context, "context must not be null");
         if (closed.get()) {
-            return CompletableFuture.failedFuture(
-                    new ConnectionException(spec.connectionId(), IotMessageKeys.CONNECTION_CLOSED));
+            return Stages.failed(new ConnectionException(spec.connectionId(), IotMessageKeys.CONNECTION_CLOSED));
         }
         String key = spec.connectionId();
         CompletableFuture<Entry> fresh = new CompletableFuture<>();
@@ -125,16 +125,29 @@ public final class ConnectionRegistry implements AutoCloseable {
         } else {
             if (entries.size() > maxConnections) {
                 entries.remove(key, fresh);
-                return CompletableFuture.failedFuture(new ConnectionException(
+                return Stages.failed(new ConnectionException(
                         key, IotMessageKeys.CONNECTION_LIMIT_EXCEEDED, maxConnections));
             }
             target = fresh;
             openAsync(adapter, spec, context, key, fresh);
         }
-        return target.thenApply(entry -> {
+        // 刻意不用 thenApply：组合算子会把领域异常包成 CompletionException，
+        // 调用方将无法直接 catch ConnectionException。这里显式交付原始异常。
+        CompletableFuture<ConnectionHandle> result = new CompletableFuture<>();
+        target.whenComplete((entry, error) -> {
+            if (error != null) {
+                result.completeExceptionally(Stages.unwrap(error));
+                return;
+            }
+            if (entry == null) {
+                result.completeExceptionally(
+                        new ConnectionException(key, IotMessageKeys.CONNECTION_FAILED, "null entry"));
+                return;
+            }
             entry.retain();
-            return new ConnectionHandle(entry);
+            result.complete(new ConnectionHandle(entry));
         });
+        return result;
     }
 
     /**

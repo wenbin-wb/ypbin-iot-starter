@@ -20,6 +20,7 @@ import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.ProbeResult;
+import cn.ypbin.iot.core.util.Stages;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -114,8 +115,7 @@ public interface ProtocolAdapter {
      * @return 探测结果 Stage
      */
     default CompletionStage<ProbeResult> probe(ConnectionSpec spec, AdapterContext context) {
-        return CompletableFuture.failedFuture(
-                new UnsupportedCapabilityException(descriptor().code(), "probe"));
+        return Stages.failed(new UnsupportedCapabilityException(descriptor().code(), "probe"));
     }
 
     /**

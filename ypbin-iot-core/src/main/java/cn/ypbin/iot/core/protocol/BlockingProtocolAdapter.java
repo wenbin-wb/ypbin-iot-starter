@@ -19,6 +19,7 @@ import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.ProbeResult;
+import cn.ypbin.iot.core.util.Stages;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
@@ -107,7 +108,9 @@ public abstract class BlockingProtocolAdapter implements ProtocolAdapter {
     }
 
     private <T> CompletionStage<T> supplyAsync(AdapterContext context, Supplier<T> supplier) {
-        return CompletableFuture.supplyAsync(supplier, executor(context));
+        // 经 Stages.normalize 归一化：supplyAsync 会把同步抛出的异常包成 CompletionException，
+        // 归一化后调用方拿到的是原始领域异常
+        return Stages.normalize(CompletableFuture.supplyAsync(supplier, executor(context)));
     }
 
     /**

@@ -25,5 +25,14 @@
             <groupId>cn.ypbin</groupId>
             <artifactId>ypbin-iot-runtime</artifactId>
         </dependency>
+        <!-- TCK 是给各协议模块的测试用的，因此 JUnit 与 AssertJ 必须是 compile 作用域 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+        </dependency>
     </dependencies>
 </project>
