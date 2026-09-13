@@ -224,7 +224,7 @@ public final class ConnectionRegistry implements AutoCloseable {
                         key, IotMessageKeys.CONNECTION_FAILED, "adapter returned null connection"));
                 return;
             }
-            Entry entry = new Entry(key, connection);
+            Entry entry = new Entry(key, connection, fresh);
             fresh.complete(entry);
             // 对端异常断开时，主动让引用计数归零并触发回收
             connection.whenClosed().whenComplete((reason, ignored) -> entry.onConnectionClosed(reason));
@@ -291,6 +291,15 @@ public final class ConnectionRegistry implements AutoCloseable {
 
         private final ProtocolConnection connection;
 
+        /**
+         * 本条目在注册表中的 Future（即自身）。
+         *
+         * <p>自持引用是为了让 {@code entries.remove(key, future)} 的 CAS 式删除可靠——
+         * 早先的写法是从 map 反查 future，一旦条目已被替换就会拿到别人的引用，
+         * 虽然结果是「不误删」但仍属脆弱写法。</p>
+         */
+        private final CompletableFuture<Entry> self;
+
         private final ReentrantLock lock = new ReentrantLock();
 
         private int refCount;
@@ -299,9 +308,10 @@ public final class ConnectionRegistry implements AutoCloseable {
 
         private boolean connectionClosed;
 
-        private Entry(String key, ProtocolConnection connection) {
+        private Entry(String key, ProtocolConnection connection, CompletableFuture<Entry> self) {
             this.key = key;
             this.connection = connection;
+            this.self = self;
         }
 
         private void retain() {
@@ -342,17 +352,8 @@ public final class ConnectionRegistry implements AutoCloseable {
             } finally {
                 lock.unlock();
             }
-            entries.remove(key, entryFuture());
+            entries.remove(key, self);
             log.debug("[ypbin-iot] connection {} closed by remote: {}", key, reason);
-        }
-
-        @SuppressWarnings("unchecked")
-        private CompletableFuture<Entry> entryFuture() {
-            CompletableFuture<Entry> future = entries.get(key);
-            if (future != null && future.isDone() && !future.isCompletedExceptionally()) {
-                return future;
-            }
-            return CompletableFuture.completedFuture(this);
         }
 
         private void scheduleIdleReclaim() {
@@ -383,7 +384,7 @@ public final class ConnectionRegistry implements AutoCloseable {
         }
 
         private void closeConnection() {
-            entries.remove(key, entryFuture());
+            entries.remove(key, self);
             try {
                 connection.close();
             } catch (RuntimeException ex) {
