@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cn.ypbin</groupId>
+        <artifactId>ypbin-iot-dependencies</artifactId>
+        <version>${revision}</version>
+        <relativePath>../ypbin-iot-dependencies/pom.xml</relativePath>
+    </parent>
+
+    <artifactId>ypbin-iot-test</artifactId>
+
+    <name>${project.artifactId}</name>
+    <description>协议一致性测试套件（TCK）与测试基座</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-runtime</artifactId>
+        </dependency>
+    </dependencies>
+</project>

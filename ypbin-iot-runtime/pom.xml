@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cn.ypbin</groupId>
+        <artifactId>ypbin-iot-dependencies</artifactId>
+        <version>${revision}</version>
+        <relativePath>../ypbin-iot-dependencies/pom.xml</relativePath>
+    </parent>
+
+    <artifactId>ypbin-iot-runtime</artifactId>
+
+    <name>${project.artifactId}</name>
+    <description>IoT 运行时内核：注册中心、连接复用、调度、微批出口。零 Spring、零 Netty</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-core</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- 复用母仓 ypbin-starter 的依赖管理、插件配置与发布 profile；
+         parent 版本显式锁定，不自动跟随（AGENTS 5.3） -->
+    <parent>
+        <groupId>cn.ypbin</groupId>
+        <artifactId>ypbin-starter-dependencies</artifactId>
+        <version>2.2.3</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>cn.ypbin</groupId>
+    <artifactId>ypbin-iot-starter</artifactId>
+    <version>${revision}</version>
+    <packaging>pom</packaging>
+
+    <name>${project.artifactId}</name>
+    <description>ypbin-iot-starter —— 多协议物联网接入框架，只做协议对接</description>
+    <url>https://github.com/wenbin-wb/ypbin-iot-starter</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>wenbin</id>
+            <name>wenbin</name>
+            <roles>
+                <role>author</role>
+            </roles>
+        </developer>
+    </developers>
+
+    <modules>
+        <module>ypbin-iot-dependencies</module>
+        <module>ypbin-iot-bom</module>
+        <module>ypbin-iot-core</module>
+        <module>ypbin-iot-runtime</module>
+        <module>ypbin-iot-transport</module>
+        <module>ypbin-iot-spring-boot-starter</module>
+        <module>ypbin-iot-protocol-tcp</module>
+        <module>ypbin-iot-test</module>
+        <module>ypbin-iot-architecture-tests</module>
+    </modules>
+
+    <properties>
+        <revision>0.1.0-SNAPSHOT</revision>
+        <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- 网络底座：锁定 4.1 线最新补丁版（PROTOCOLS §4.1） -->
+        <netty.version>4.1.138.Final</netty.version>
+    </properties>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <!-- 覆盖母仓 parent 内联的 license header 署名，
+                     否则本仓所有文件会被强制署上 ypbin-starter authors（DESIGN §2.1） -->
+                <plugin>
+                    <groupId>com.diffplug.spotless</groupId>
+                    <artifactId>spotless-maven-plugin</artifactId>
+                    <configuration>
+                        <java>
+                            <licenseHeader>
+                                <content><![CDATA[/*
+ * Copyright (c) 2024-present ypbin-iot-starter authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+]]></content>
+                            </licenseHeader>
+                            <trimTrailingWhitespace/>
+                            <endWithNewline/>
+                            <importOrder/>
+                            <removeUnusedImports/>
+                        </java>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>
