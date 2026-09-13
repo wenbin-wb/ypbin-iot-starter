@@ -172,6 +172,19 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         }
         ProtocolAdapter adapter = adapterOptional.get();
         AdapterContext context = contextOptional.get();
+        DeviceSpec effective = withDefaultPollInterval(device);
+        if (properties.devices().isProbeBeforeBind()) {
+            ProbeResult probe = adapter.probe(specOptional.get(), context)
+                    .toCompletableFuture()
+                    .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    .handle((result, error) -> error == null ? result : null)
+                    .join();
+            if (probe == null || !probe.reachable()) {
+                log.warn("[ypbin-iot] device {} skipped: probe before bind reported unreachable ({})",
+                        device.deviceId(), probe == null ? "probe failed" : probe.failureReason());
+                return false;
+            }
+        }
         try {
             // 同一设备重复绑定：先释放旧会话与旧引用，否则旧引用永不归还、连接只增不减
             unbind(device.deviceId());
@@ -182,7 +195,7 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
                     .join();
             DeviceSession session;
             try {
-                session = adapter.bind(handle.connection(), device, context)
+                session = adapter.bind(handle.connection(), effective, context)
                         .toCompletableFuture()
                         .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
                         .join();
@@ -201,6 +214,25 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             log.error("[ypbin-iot] failed to bind device {}", device.deviceId(), ex);
             return false;
         }
+    }
+
+    /**
+     * 设备未声明采集周期时补上配置的默认值。
+     *
+     * <p>{@code DeviceSpec.pollInterval} 为 {@link Duration#ZERO} 表示「仅订阅不轮询」，
+     * 但设备台账往往不显式填这一项——此时用 {@code ypbin.iot.devices.default-poll-interval} 兜底，
+     * 避免「配置了默认周期却不生效」。</p>
+     */
+    private DeviceSpec withDefaultPollInterval(DeviceSpec device) {
+        if (!device.pollInterval().isZero()) {
+            return device;
+        }
+        Duration fallback = properties.devices().defaultPollInterval();
+        if (fallback == null || fallback.isZero()) {
+            return device;
+        }
+        return new DeviceSpec(device.deviceId(), device.deviceName(), device.protocol(),
+                device.connectionId(), device.localAddress(), fallback, device.properties());
     }
 
     /**

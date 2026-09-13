@@ -346,6 +346,54 @@ class ConnectionRegistryTest {
         }
     }
 
+    @Test
+    @DisplayName("CR-8 建链限速必须真的把速率钳在配置值以内（10 万连接的启动风暴闸门）")
+    void connectRateLimitMustThrottle() {
+        int limitPerSecond = 5;
+        int attempts = 9;
+        CountingAdapter adapter = new CountingAdapter(Duration.ZERO, null);
+        ConnectionRegistry registry = new ConnectionRegistry(Duration.ofMinutes(5), 100, limitPerSecond,
+                0.0D, scheduler, Clock.systemUTC());
+        try {
+            long started = System.nanoTime();
+            for (int i = 0; i < attempts; i++) {
+                registry.acquire(adapter, spec("limited-" + i), context).toCompletableFuture().join()
+                        .release();
+            }
+            long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            // 桶初始满（5 个令牌），其余 4 个需按 5/s 补充 → 至少约 600ms
+            assertThat(elapsedMillis)
+                    .as("限速未生效：%d 次建链（限 %d/s）耗时仅 %d ms", attempts, limitPerSecond, elapsedMillis)
+                    .isGreaterThanOrEqualTo(500L);
+            assertThat(registry.connectThrottleWaitMillis())
+                    .as("累计限速等待必须被记录，否则限速不可观测")
+                    .isPositive();
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
+    @DisplayName("CR-9 限速为 0 时不得引入任何额外延迟")
+    void unlimitedMustNotDelay() {
+        CountingAdapter adapter = new CountingAdapter(Duration.ZERO, null);
+        ConnectionRegistry registry = new ConnectionRegistry(Duration.ofMinutes(5), 100, 0, 0.0D,
+                scheduler, Clock.systemUTC());
+        try {
+            long started = System.nanoTime();
+            for (int i = 0; i < 20; i++) {
+                registry.acquire(adapter, spec("unlimited-" + i), context).toCompletableFuture().join()
+                        .release();
+            }
+            assertThat(Duration.ofNanos(System.nanoTime() - started).toMillis())
+                    .as("未配置限速时不得引入延迟")
+                    .isLessThan(500L);
+            assertThat(registry.connectThrottleWaitMillis()).isZero();
+        } finally {
+            registry.close();
+        }
+    }
+
     private static ConnectionSpec spec(String connectionId) {
         return new ConnectionSpec(connectionId, CODE, Endpoint.of("tcp://127.0.0.1:1"),
                 Duration.ofSeconds(2), Duration.ofSeconds(2), null, null, Map.of());

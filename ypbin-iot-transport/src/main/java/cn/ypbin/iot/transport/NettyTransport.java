@@ -34,6 +34,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.DelimiterBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.bytes.ByteArrayEncoder;
+import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.net.InetSocketAddress;
@@ -172,8 +173,12 @@ public final class NettyTransport implements AutoCloseable {
             @Override
             protected void initChannel(SocketChannel channel) {
                 if (idleInterval != null && !idleInterval.isZero() && !idleInterval.isNegative()) {
-                    channel.pipeline().addLast(new IdleStateHandler(0, 0,
-                            idleInterval.toMillis(), TimeUnit.MILLISECONDS));
+                    // 读空闲即「读超时」：对端在配置窗口内一个字节都没发，视为静默断链。
+                    // 必须配套 IdleCloseHandler 消费事件——只装 IdleStateHandler 不消费，
+                    // 等于配置了但不生效（本仓自列的坑之一）。
+                    channel.pipeline().addLast(new IdleStateHandler(
+                            idleInterval.toMillis(), 0, 0, TimeUnit.MILLISECONDS));
+                    channel.pipeline().addLast(new IdleCloseHandler(spec.connectionId()));
                 }
                 addFraming(channel, framingSpec);
                 channel.pipeline().addLast(new ByteArrayEncoder());
@@ -205,6 +210,35 @@ public final class NettyTransport implements AutoCloseable {
             return;
         }
         throw new IllegalArgumentException("unsupported framing mode: " + spec.mode());
+    }
+
+    /**
+     * 空闲关闭处理器：把 {@link IdleStateEvent} 变成「关闭链路」。
+     *
+     * <p>关闭而不是静默保留：链路由 {@code ConnectionRegistry} 持有，关闭会触发
+     * {@code whenClosed} 并进入空闲回收/重连，链路状态因此始终可观测。</p>
+     *
+     * @author wenbin
+     * @since 2026-09-13
+     */
+    private static final class IdleCloseHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
+
+        private final String connectionId;
+
+        private IdleCloseHandler(String connectionId) {
+            this.connectionId = connectionId;
+        }
+
+        @Override
+        public void userEventTriggered(ChannelHandlerContext context, Object event) {
+            if (event instanceof IdleStateEvent idleEvent) {
+                log.warn("[ypbin-iot] connection {} idle ({}); closing to let the registry reclaim it",
+                        connectionId, idleEvent.state());
+                context.close();
+                return;
+            }
+            context.fireUserEventTriggered(event);
+        }
     }
 
     /**

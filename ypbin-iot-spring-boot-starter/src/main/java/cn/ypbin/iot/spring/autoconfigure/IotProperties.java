@@ -86,8 +86,10 @@ public record IotProperties(
     /**
      * 调度与线程池配置。
      *
-     * @param parallelism   调度用平台线程数（默认 = CPU 核数）
-     * @param maxPoolSize   调度器补偿「占 OS 线程但不 pinning」的阻塞之上限（默认 256）
+     * <p><b>注意</b>：虚拟线程调度器的 {@code jdk.virtualThreadScheduler.parallelism} 与
+     * {@code maxPoolSize} 是 <b>JVM 系统属性</b>，无法通过 Spring 配置生效，
+     * 因此不在此声明——它们的推荐取值见 {@code DESIGN.md} §5.10。</p>
+     *
      * @param platformPool  平台线程池：承载 JNI / native 调用
      * @param workerThreads Netty worker 线程数
      * @param shutdownTimeout 停机时等待在途任务的上限
@@ -95,14 +97,7 @@ public record IotProperties(
      * @since 2026-09-13
      */
     public record SchedulerProperties(
-            Integer parallelism,
-            Integer maxPoolSize,
-            PlatformPoolProperties platformPool,
-            Integer workerThreads,
-            Duration shutdownTimeout) {
-
-        /** 默认调度补偿上限：与 JDK 默认值保持一致。 */
-        public static final int DEFAULT_MAX_POOL_SIZE = 256;
+            PlatformPoolProperties platformPool, Integer workerThreads, Duration shutdownTimeout) {
 
         /**
          * 紧凑构造器：归一化默认值。
@@ -118,8 +113,7 @@ public record IotProperties(
          * @return 配置
          */
         public static SchedulerProperties defaults() {
-            return new SchedulerProperties(null, DEFAULT_MAX_POOL_SIZE, PlatformPoolProperties.defaults(),
-                    null, Duration.ofSeconds(5));
+            return new SchedulerProperties(PlatformPoolProperties.defaults(), null, Duration.ofSeconds(5));
         }
     }
 

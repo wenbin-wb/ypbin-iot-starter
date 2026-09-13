@@ -35,8 +35,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.slf4j.Logger;
@@ -74,6 +76,9 @@ public final class ConnectionRegistry implements AutoCloseable {
     /** acquire 因条目被回收而重试的最大次数。 */
     private static final int MAX_ACQUIRE_ATTEMPTS = 3;
 
+    /** 令牌桶定点运算倍率。 */
+    private static final long TOKEN_SCALE = 1000L;
+
     private final ConcurrentMap<String, CompletableFuture<Entry>> entries = new ConcurrentHashMap<>();
 
     /** 保护 {@link #closed} 与「入表 + 发起建链 / 快照清表」的原子性。 */
@@ -87,7 +92,21 @@ public final class ConnectionRegistry implements AutoCloseable {
 
     private final int maxConnections;
 
+    /** 建链速率闸门：每秒允许的新建链数；0 表示不限速。 */
+    private final int connectRateLimit;
+
+    /** 建链抖动系数：把同一时刻的建链请求打散，避免集群重连风暴。 */
+    private final double connectRateJitter;
+
+    /** 令牌桶的「上次补充时刻」（纳秒）。 */
+    private final AtomicLong lastRefillNanos = new AtomicLong(System.nanoTime());
+
+    /** 当前可用令牌数（放大 1000 倍做定点运算，避免浮点误差累积）。 */
+    private final AtomicLong availableTokens;
+
     private final AtomicInteger openCount = new AtomicInteger();
+
+    private final AtomicLong connectThrottleWaitMillis = new AtomicLong();
 
     private volatile boolean closed;
 
@@ -100,11 +119,105 @@ public final class ConnectionRegistry implements AutoCloseable {
      * @param clock          时钟
      */
     public ConnectionRegistry(Duration idleTimeout, int maxConnections, TaskScheduler scheduler, Clock clock) {
+        this(idleTimeout, maxConnections, 0, 0.0D, scheduler, clock);
+    }
+
+    /**
+     * 创建连接注册中心。
+     *
+     * @param idleTimeout        空闲回收超时
+     * @param maxConnections     最大并发链路数（软限制）
+     * @param connectRateLimit   每秒最大新建链数；非正数表示不限速
+     * @param connectRateJitter  建链抖动系数（0~1），用于打散同一时刻的建链请求
+     * @param scheduler          调度器
+     * @param clock              时钟
+     */
+    public ConnectionRegistry(Duration idleTimeout, int maxConnections, int connectRateLimit,
+            double connectRateJitter, TaskScheduler scheduler, Clock clock) {
         this.idleTimeout = idleTimeout == null || idleTimeout.isZero() || idleTimeout.isNegative()
                 ? Duration.ofMinutes(5) : idleTimeout;
         this.maxConnections = maxConnections <= 0 ? 100_000 : maxConnections;
+        this.connectRateLimit = Math.max(connectRateLimit, 0);
+        this.connectRateJitter = Math.min(Math.max(connectRateJitter, 0.0D), 1.0D);
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler must not be null");
         this.clock = clock == null ? Clock.systemUTC() : clock;
+        this.availableTokens = new AtomicLong(tokensOf(this.connectRateLimit));
+    }
+
+    private static long tokensOf(int ratePerSecond) {
+        return ratePerSecond <= 0 ? 0L : ratePerSecond * TOKEN_SCALE;
+    }
+
+    /**
+     * 获取一个建链令牌（阻塞调用线程直到拿到或超时）。
+     *
+     * <p><b>为什么必须是闸门而不是计数器</b>：10 万设备同时上线会在数秒内产生 10 万次 TCP 握手，
+     * 既打满本机 FD/SYN 队列，也会击穿对端 PLC 的并发连接上限——工业设备对此极其敏感，
+     * <b>打挂对端是真实事故</b>。这里用令牌桶把建链速率钳在配置值以内，
+     * 并叠加抖动把请求打散（否则限速后所有请求仍会在每秒初的同一毫秒涌出）。</p>
+     *
+     * @return 实际等待的毫秒数；未限速时返回 0
+     */
+    private long acquireConnectToken() {
+        if (connectRateLimit <= 0) {
+            return 0L;
+        }
+        long startedNanos = System.nanoTime();
+        while (true) {
+            refillTokens();
+            long current = availableTokens.get();
+            if (current >= TOKEN_SCALE && availableTokens.compareAndSet(current, current - TOKEN_SCALE)) {
+                break;
+            }
+            // 桶空：等待一个令牌的产生时间（按剩余量估算，最长不超过一个补充周期）
+            sleepQuietly(Math.max(1L, 1000L / connectRateLimit));
+        }
+        // 抖动：把拿到令牌后立刻发起的建链再打散一点，避免"限速后仍同步"
+        if (connectRateJitter > 0.0D) {
+            long spreadMillis = (long) (1000.0D / Math.max(connectRateLimit, 1) * connectRateJitter);
+            if (spreadMillis > 0L) {
+                sleepQuietly(ThreadLocalRandom.current().nextLong(spreadMillis + 1L));
+            }
+        }
+        return Duration.ofNanos(System.nanoTime() - startedNanos).toMillis();
+    }
+
+    private void refillTokens() {
+        long now = System.nanoTime();
+        long last = lastRefillNanos.get();
+        long elapsedNanos = now - last;
+        if (elapsedNanos <= 0L) {
+            return;
+        }
+        long capacity = tokensOf(connectRateLimit);
+        long refill = elapsedNanos * connectRateLimit / Duration.ofSeconds(1).toNanos() * TOKEN_SCALE;
+        if (refill <= 0L) {
+            return;
+        }
+        if (!lastRefillNanos.compareAndSet(last, now)) {
+            return;
+        }
+        long updated = Math.min(capacity, availableTokens.addAndGet(refill));
+        if (updated < 0L) {
+            availableTokens.set(capacity);
+        }
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * 已累计等待的建链限速时间（毫秒），用于诊断限速是否真的在起作用。
+     *
+     * @return 累计等待毫秒数
+     */
+    public long connectThrottleWaitMillis() {
+        return connectThrottleWaitMillis.get();
     }
 
     /**
@@ -161,6 +274,13 @@ public final class ConnectionRegistry implements AutoCloseable {
                 target = fresh;
             } else {
                 target = fresh;
+                // 限速在锁外等待会破坏「入表 + 建链」的原子性（期间新调用者会拿到未启动的 fresh），
+                // 因此这里在读写锁内取令牌。代价是限速期间 acquire 会短暂阻塞，
+                // 这正是"闸门"的语义：宁可让调用方等一下，也不让 10 万次握手同时冲向对端。
+                long waited = acquireConnectToken();
+                if (waited > 0L) {
+                    connectThrottleWaitMillis.addAndGet(waited);
+                }
                 openAsync(adapter, spec, context, key, fresh);
             }
         } finally {

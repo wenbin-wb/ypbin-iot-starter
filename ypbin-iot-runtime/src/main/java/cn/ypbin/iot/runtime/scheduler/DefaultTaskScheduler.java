@@ -77,7 +77,27 @@ public final class DefaultTaskScheduler implements TaskScheduler, AutoCloseable 
      * @param platformPoolSize 平台线程池大小（建议 ≥ 串口数 + CAN 通道数）
      * @param platformQueueCapacity 平台线程池队列容量
      */
+    private final Duration shutdownTimeout;
+
+    /**
+     * 以默认关停超时创建。
+     *
+     * @param platformPoolSize      平台线程池大小
+     * @param platformQueueCapacity 平台线程池队列容量
+     */
     public DefaultTaskScheduler(int platformPoolSize, int platformQueueCapacity) {
+        this(platformPoolSize, platformQueueCapacity, Duration.ofSeconds(5));
+    }
+
+    /**
+     * 创建调度器。
+     *
+     * @param platformPoolSize      平台线程池大小（建议 ≥ 串口数 + CAN 通道数）
+     * @param platformQueueCapacity 平台线程池队列容量
+     * @param shutdownTimeout       关停时等待在途任务的上限
+     */
+    public DefaultTaskScheduler(int platformPoolSize, int platformQueueCapacity, Duration shutdownTimeout) {
+        this.shutdownTimeout = shutdownTimeout == null ? Duration.ofSeconds(5) : shutdownTimeout;
         this.timer = Executors.newSingleThreadScheduledExecutor(namedDaemon(TIMER_THREAD_NAME));
         this.virtualExecutor = Executors.newVirtualThreadPerTaskExecutor();
         int poolSize = platformPoolSize <= 0 ? defaultPlatformPoolSize() : platformPoolSize;
@@ -135,7 +155,17 @@ public final class DefaultTaskScheduler implements TaskScheduler, AutoCloseable 
         }
         timer.shutdownNow();
         virtualExecutor.shutdownNow();
-        platformExecutor.shutdownNow();
+        platformExecutor.shutdown();
+        try {
+            if (!platformExecutor.awaitTermination(shutdownTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                log.warn("[ypbin-iot] platform executor did not terminate within {}; forcing shutdown",
+                        shutdownTimeout);
+                platformExecutor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            platformExecutor.shutdownNow();
+        }
         log.debug("[ypbin-iot] task scheduler closed.");
     }
 

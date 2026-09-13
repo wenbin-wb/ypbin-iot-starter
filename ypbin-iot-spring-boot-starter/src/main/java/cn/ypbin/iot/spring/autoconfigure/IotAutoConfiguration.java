@@ -80,7 +80,7 @@ public class IotAutoConfiguration {
         int coreSize = pool.coreSize() == null ? 0 : pool.coreSize();
         int queueCapacity = pool.queueCapacity() == null ? 0 : pool.queueCapacity();
         log.debug("[ypbin-iot] iotTaskScheduler configured.");
-        return new DefaultTaskScheduler(coreSize, queueCapacity);
+        return new DefaultTaskScheduler(coreSize, queueCapacity, properties.scheduler().shutdownTimeout());
     }
 
     /**
@@ -157,7 +157,8 @@ public class IotAutoConfiguration {
         log.debug("[ypbin-iot] iotConnectionRegistry configured (maxConnections={}).",
                 properties.connection().maxConnections());
         return new ConnectionRegistry(properties.connection().idleTimeout(),
-                properties.connection().maxConnections(), scheduler, clock);
+                properties.connection().maxConnections(), properties.connection().connectRateLimit(),
+                properties.connection().connectRateJitter(), scheduler, clock);
     }
 
     /**
