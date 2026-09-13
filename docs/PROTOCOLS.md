@@ -1112,6 +1112,34 @@ M0 不是「搭个空壳」，而是**把"能跑"这件事变成可验证事实*
 > **M0 不达标就不做 M1**：不是要求性能达标，而是要求**机制全通**——
 > 连接复用、微批出口、线程分工、TCK、架构门禁这五件事跑通之后，后面每个协议都是按模板填空。
 
+### 7.3.1 M0 实施结果（2026-09-13，已完成）
+
+| 项 | 结果 |
+|---|---|
+| 模块 | 10 个（dependencies / bom / core / runtime / transport / spring-boot-starter / protocol-tcp / test / architecture-tests + 根聚合） |
+| 构建 | `mvn clean test` **全模块 BUILD SUCCESS**（含 spotless 与 JaCoCo 门禁） |
+| 测试 | **107 个用例**全绿（core 31 / runtime 25 / protocol-tcp 23 / starter 17 / 架构 11） |
+| 覆盖率 | core **84.2%** · runtime **82.4%** · protocol-tcp **86.0%** · starter **92.4%**——**均超过母仓 80% 门禁，未下调任何阈值** |
+| 规模 | 主源码 87 文件 / 9537 行；测试 3644 行 |
+
+**M0 期间发现并修复的三个真实缺陷**（都由测试暴露，非推测）：
+
+| # | 问题 | 性质 |
+|---|---|---|
+| 1 | **`CompletionStage` 异常交付契约缺口**：`thenApply` 会把领域异常包成 `CompletionException`，调用方 `catch (ConnectionException)` 捕获不到 | 契约问题 → 新增 `cn.ypbin.iot.core.util.Stages` 归一化 + SPI 约定 C11 |
+| 2 | **`EnvironmentPostProcessor` 默认值注入语义错误**：用 `addLast` 注入「追加后的合并值」，导致用户已配置的原值优先、合并结果永不生效 | 功能缺陷 → 改 `addFirst`（母仓用 `addLast` 是因为它注入纯默认值，语义不同） |
+| 3 | **transport 会话绑定时机错误**：原设计在 `open` 阶段就要求会话（需伪造 `DeviceSpec` 占位），与「1:N 链路共享」模型冲突 | 设计缺陷 → 改为**会话延迟绑定**（`bindSession`），并把该能力上移到 `ProtocolAdapter.bind` |
+
+**M0 期间识别出的一个 SPI 缺口**：原 `DeviceRegistry` 只覆盖「设备从哪来」，未覆盖「链路建链参数从哪来」。
+已补齐 `ConnectionSpecProvider`（详见 `SPI.md` §8.2）——两者必须拆开，否则 device 级会携带链路级参数。
+
+**M0 阶段刻意保留的两处实现简化**（有明确理由与触发条件）：
+
+| 简化 | 现状 | 触发升级的条件 |
+|---|---|---|
+| 调度器 | 用 `ScheduledExecutorService`，未实现 DESIGN §4.4 的分层时间轮 | 通过 1 万连接门禁、准备冲击 10 万连接时（M0 门槛下堆开销与精度完全够用） |
+| Netty 传输 | 用 `NioEventLoopGroup`，未切 `EpollEventLoopGroup` | 同上（届时可拿到 `SO_REUSEPORT` 与更低系统调用开销） |
+
 ### 7.4 M1 之后的质量门禁
 
 每个协议模块合入前必须满足（缺一不可）：

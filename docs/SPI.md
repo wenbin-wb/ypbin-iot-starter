@@ -36,6 +36,7 @@
 | **C8** | **JSON 只能用 Jackson 3** | 母仓已全面切至 Jackson 3（`tools.jackson`）并移除 Jackson 2 运行时；本仓若需 JSON（如 `DataBatch` 的调试序列化）**必须**用 Jackson 3 |
 | **C9** | **`ProtocolCode` 是值对象而非枚举** | 协议集合对外延开放（第三方可新增协议），枚举会逼第三方改 `core`。`ProtocolCode.of("...")` 做格式校验即可 |
 | **C10** | **远程调用超时显式化** | `ConnectionSpec.connectTimeout` / `requestTimeout` 为必填语义（有默认值但可覆盖）；框架内部任何 HTTP/网络客户端**不得使用无超时默认值** |
+| **C11** | **异常交付必须是原始领域异常** | 所有 SPI 方法异常完成时交付**原始** `IotException` 子类，**不得**交付 `CompletionException` 包装。原因：`CompletableFuture` 的组合算子（`thenApply` 等）会自动包装上游异常，导致调用方 `catch (ConnectionException ex)` 捕获不到。实现方式是在异常路径显式 `completeExceptionally(原始异常)`，或用 `cn.ypbin.iot.core.util.Stages` 工具归一化。**这是 M0 实施中由测试发现的契约缺口** |
 
 ---
 
@@ -83,6 +84,7 @@ cn.ypbin.iot.core
 │   ├── DataSink                      数据落地/转发实现
 │   ├── DeviceEventListener           设备事件监听
 │   ├── DeviceRegistry                设备来源（启动期全量加载 + 运行期变更推送）
+│   ├── ConnectionSpecProvider        链路规格来源（按 connectionId 取建链参数）
 │   ├── ValidationResult              设备配置校验结果（record）
 │   └── DeviceChange / ChangeType     设备配置变更事件（含 revision，保幂等）
 ├── i18n/                            ← 消息键常量（纯 String，零依赖）
@@ -1692,6 +1694,55 @@ record DeviceChange(ChangeType type, DeviceSpec device, long revision) {
 `DeviceRegistry` 的 `REMOVE` 事件是宿主清理设备影子的**唯一可靠时机**——
 本仓不实现影子存储（见 `RUNTIME.md` §1），但保证**删除事件一定送达**，
 否则 Redis 中的影子数据会永久残留并无限增长。
+
+---
+
+### 8.2 `ConnectionSpecProvider` —— 链路规格来源（M0 新增）
+
+> **这是 M0 实施中识别出的 SPI 缺口**：原设计只有 `DeviceRegistry`（设备从哪来），
+> 未回答「链路的建链参数（端点/超时/TLS/凭据引用）从哪来」。
+> 两者职责不同且**必须拆开**：一条 Modbus 网关链路可被 200 个从站共享，
+> 把 endpoint 放进 `DeviceSpec` 会导致 200 个设备各携带同一份端点、改一次要改 200 处。
+
+```java
+package cn.ypbin.iot.core.spi;
+
+import cn.ypbin.iot.core.model.ConnectionSpec;
+import java.util.Optional;
+
+/**
+ * 物理链路规格来源 SPI：按 {@code connectionId} 提供建链参数。
+ *
+ * <p>运行期约束同 {@code DeviceRegistry}：实现应在启动期把链路规格加载到内存
+ * （或直接由配置提供），运行期只读；框架只在设备绑定与重连时查询它，
+ * **不会在采集路径上反复调用**。</p>
+ *
+ * @author wenbin
+ * @since 2026-09-13
+ */
+public interface ConnectionSpecProvider {
+
+    /**
+     * 按链路标识查找建链规格。
+     *
+     * @param connectionId 链路标识
+     * @return 链路规格；不存在时返回空 Optional
+     */
+    Optional<ConnectionSpec> find(String connectionId);
+}
+```
+
+**框架如何使用两者**（`IotLifecycle` 的绑定流程）：
+
+```
+DeviceRegistry.loadAll()                    → 得到设备清单（deviceId + protocol + connectionId + localAddress）
+  └─ 对每个设备：
+      ConnectionSpecProvider.find(connectionId)  → 得到建链参数
+        └─ ConnectionRegistry.acquire(adapter, spec, ctx)   → 单飞建链 / 复用
+            └─ ProtocolAdapter.bind(connection, device, ctx) → 设备会话
+```
+
+两者都返回空则不接入该设备，并**记 warn 日志**（不静默跳过）。
 
 ---
 
