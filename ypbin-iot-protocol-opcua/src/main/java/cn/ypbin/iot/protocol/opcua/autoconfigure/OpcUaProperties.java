@@ -36,6 +36,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param clientKeyStorePasswordRef keystore 口令的凭据引用（**与用户口令分开**，见 {@code credentialRef}）
  * @param trustListDir       信任证书目录（存放服务端证书文件）；非 None 策略且未开 trust-all 时必填
  * @param trustAll           是否信任全部服务端证书（**仅开发环境**，开启会打 WARN）
+ * @param verifyHostname     是否校验服务端证书的主机名（默认关闭，见 {@code validatorOf} 的说明）
  * @author wenbin
  * @since 2026-09-14
  */
@@ -54,7 +55,8 @@ public record OpcUaProperties(
         @Nullable String clientKeyStore,
         @Nullable String clientKeyStorePasswordRef,
         @Nullable String trustListDir,
-        @Nullable Boolean trustAll) {
+        @Nullable Boolean trustAll,
+        @Nullable Boolean verifyHostname) {
 
     /** 配置前缀。 */
     public static final String PREFIX = "ypbin.iot.protocol.opcua";
@@ -181,6 +183,15 @@ public record OpcUaProperties(
      *
      * @return 开启返回 {@code true}
      */
+    /**
+     * 是否校验服务端证书的主机名。
+     *
+     * @return 开启返回 {@code true}
+     */
+    public boolean isVerifyHostname() {
+        return Boolean.TRUE.equals(verifyHostname);
+    }
+
     public boolean isTrustAll() {
         return Boolean.TRUE.equals(trustAll);
     }

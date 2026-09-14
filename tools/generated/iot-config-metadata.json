@@ -8,7 +8,7 @@
     "ypbin-iot-protocol-mqtt",
     "ypbin-iot-protocol-opcua"
   ],
-  "propertyCount": 50,
+  "propertyCount": 51,
   "properties": [
     {
       "name": "ypbin.iot.connection.connect-rate-jitter",
@@ -286,6 +286,14 @@
       "name": "ypbin.iot.protocol.opcua.username",
       "type": "java.lang.String",
       "description": "用户名；配置后表示使用用户名密码认证",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.protocol.opcua.autoconfigure.OpcUaProperties",
+      "module": "ypbin-iot-protocol-opcua"
+    },
+    {
+      "name": "ypbin.iot.protocol.opcua.verify-hostname",
+      "type": "java.lang.Boolean",
+      "description": "是否校验服务端证书的主机名（默认关闭，见 {@code validatorOf} 的说明）",
       "defaultValue": null,
       "sourceType": "cn.ypbin.iot.protocol.opcua.autoconfigure.OpcUaProperties",
       "module": "ypbin-iot-protocol-opcua"

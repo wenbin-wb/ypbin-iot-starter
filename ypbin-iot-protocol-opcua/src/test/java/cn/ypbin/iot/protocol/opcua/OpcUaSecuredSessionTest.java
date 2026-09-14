@@ -110,7 +110,7 @@ class OpcUaSecuredSessionTest {
         Files.copy(server.serverCertificateFile(), trustDir.resolve("server.der"));
         this.trustDirPath = trustDir;
 
-        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null, null, null, null, null, "opcua-ref", keyStore.toString(), "keystore-ref", trustDir.toString(), null);
+        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null, null, null, null, null, "opcua-ref", keyStore.toString(), "keystore-ref", trustDir.toString(), null, null);
         scheduler = new DefaultTaskScheduler(2, 64);
         adapter = new OpcUaAdapter(properties);
     }
@@ -162,9 +162,7 @@ class OpcUaSecuredSessionTest {
     void usernameTokenMustWorkEndToEnd() {
         // 这条用例是「③ 至少用户名密码 + 证书管理器接入」中**用户名密码**那一半的验证。
         // 之前只证明了 UsernameProvider 能被装配出来 —— 那与「服务端真的接受它」是两回事。
-        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null,
-                null, null, null, OpcUaTestServer.USERNAME, "user-ref", keyStorePath.toString(),
-                "keystore-ref", trustDirPath.toString(), null);
+        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null, null, null, null, OpcUaTestServer.USERNAME, "user-ref", keyStorePath.toString(), "keystore-ref", trustDirPath.toString(), null, null);
         OpcUaAdapter secured = new OpcUaAdapter(properties);
         AdapterContext securedContext = contextWithCredentials(Map.of(
                 "user-ref", OpcUaTestServer.PASSWORD,
@@ -196,9 +194,7 @@ class OpcUaSecuredSessionTest {
     @Test
     @DisplayName("SEC-E2E-03 口令错误必须被服务端拒绝（证明 SEC-E2E-02 不是「配了就行」）")
     void wrongPasswordMustBeRejected() {
-        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null,
-                null, null, null, OpcUaTestServer.USERNAME, "user-ref", keyStorePath.toString(),
-                "keystore-ref", trustDirPath.toString(), null);
+        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null, null, null, null, OpcUaTestServer.USERNAME, "user-ref", keyStorePath.toString(), "keystore-ref", trustDirPath.toString(), null, null);
         OpcUaAdapter secured = new OpcUaAdapter(properties);
         AdapterContext wrongContext = contextWithCredentials(Map.of(
                 "user-ref", "definitely-not-the-password",

@@ -262,11 +262,21 @@ final class OpcUaSecurity {
         // （IP 直连尤其常见），保留它会让大量可用的现场设备连不上。
         //
         // 代价必须写清楚：信任目录里**只能放叶子证书**。放 CA 会让该 CA 签发的任意主体证书通过校验。
-        Set<ValidationCheck> checks = Set.of(
-                ValidationCheck.VALIDITY,
-                ValidationCheck.KEY_USAGE_END_ENTITY,
-                ValidationCheck.EXTENDED_KEY_USAGE_END_ENTITY,
-                ValidationCheck.APPLICATION_URI);
+        // 是否校验主机名做成**可选项**（默认关）：
+        // 现场服务器证书的 CN/SAN 常与配置的 host 不一致（IP 直连尤其常见），
+        // 默认打开会让大量可用设备连不上；但安全敏感的部署应当自行打开。
+        // 注意它的防护力有限：比对值取自服务端自己 GetEndpoints 返回的端点描述，
+        // 对**主动 MITM 无防护**（真正的门闩只有信任列表）。
+        Set<ValidationCheck> checks = properties.isVerifyHostname()
+                ? Set.of(ValidationCheck.VALIDITY,
+                        ValidationCheck.KEY_USAGE_END_ENTITY,
+                        ValidationCheck.EXTENDED_KEY_USAGE_END_ENTITY,
+                        ValidationCheck.APPLICATION_URI,
+                        ValidationCheck.HOSTNAME)
+                : Set.of(ValidationCheck.VALIDITY,
+                        ValidationCheck.KEY_USAGE_END_ENTITY,
+                        ValidationCheck.EXTENDED_KEY_USAGE_END_ENTITY,
+                        ValidationCheck.APPLICATION_URI);
         return new DefaultClientCertificateValidator(trustList, checks, quarantine);
     }
 

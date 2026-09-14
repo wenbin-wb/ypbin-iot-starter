@@ -96,7 +96,7 @@ class OpcUaSecurityTest {
     void nonNonePolicyMustLoadKeyStore() throws Exception {
         Path keyStore = generateKeyStore("client");
         Path trustDir = exportTrustedCertificate(keyStore, "client");
-        OpcUaProperties properties = secured(keyStore.toString(), trustDir.toString(), null, null);
+        OpcUaProperties properties = secured(keyStore.toString(), trustDir.toString(), null, null, null);
 
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties,
                 context(ref -> Optional.of(new CredentialResolver.Credential("u", STORE_PASSWORD.toCharArray(),
@@ -114,7 +114,7 @@ class OpcUaSecurityTest {
     void credentialsMustProduceUsernameIdentity() throws Exception {
         Path keyStore = generateKeyStore("client");
         Path trustDir = exportTrustedCertificate(keyStore, "client");
-        OpcUaProperties properties = secured(keyStore.toString(), trustDir.toString(), "operator", null);
+        OpcUaProperties properties = secured(keyStore.toString(), trustDir.toString(), "operator", null, null);
 
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties,
                 context(ref -> Optional.of(new CredentialResolver.Credential("operator",
@@ -127,7 +127,7 @@ class OpcUaSecurityTest {
     @DisplayName("SEC-04 trust-all 必须能在没有信任目录时建出校验器（开发路径）")
     void trustAllMustWorkWithoutTrustDirectory() throws Exception {
         Path keyStore = generateKeyStore("client");
-        OpcUaProperties properties = secured(keyStore.toString(), null, null, Boolean.TRUE);
+        OpcUaProperties properties = secured(keyStore.toString(), null, null, Boolean.TRUE, null);
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties,
                 context(ref -> Optional.of(new CredentialResolver.Credential("u", STORE_PASSWORD.toCharArray(),
                         Map.of()))), "c1");
@@ -137,7 +137,7 @@ class OpcUaSecurityTest {
     @Test
     @DisplayName("SEC-05 非 None 策略缺 keystore 必须 fail-fast")
     void missingKeyStoreMustFailFast() {
-        OpcUaProperties properties = secured(null, tempDir.toString(), null, null);
+        OpcUaProperties properties = secured(null, tempDir.toString(), null, null, null);
         AdapterContext context = context(ref -> Optional.of(new CredentialResolver.Credential("u",
                 STORE_PASSWORD.toCharArray(), Map.of())));
         assertThatThrownBy(() -> OpcUaSecurity.prepare(properties, context, "c1"))
@@ -150,7 +150,7 @@ class OpcUaSecurityTest {
     @DisplayName("SEC-06 既无信任目录又未开 trust-all 必须 fail-fast")
     void missingTrustConfigurationMustFailFast() throws Exception {
         Path keyStore = generateKeyStore("client");
-        OpcUaProperties properties = secured(keyStore.toString(), null, null, null);
+        OpcUaProperties properties = secured(keyStore.toString(), null, null, null, null);
         AdapterContext context = context(ref -> Optional.of(new CredentialResolver.Credential("u",
                 STORE_PASSWORD.toCharArray(), Map.of())));
         assertThatThrownBy(() -> OpcUaSecurity.prepare(properties, context, "c1"))
@@ -163,7 +163,7 @@ class OpcUaSecurityTest {
     @DisplayName("SEC-07 取不到凭据必须 fail-fast，绝不回落到明文口令")
     void unresolvableCredentialMustFailFast() throws Exception {
         Path keyStore = generateKeyStore("client");
-        OpcUaProperties properties = secured(keyStore.toString(), tempDir.toString(), null, Boolean.TRUE);
+        OpcUaProperties properties = secured(keyStore.toString(), tempDir.toString(), null, Boolean.TRUE, null);
         AdapterContext context = context(ref -> Optional.empty());
         assertThatThrownBy(() -> OpcUaSecurity.prepare(properties, context, "c1"))
                 .isInstanceOf(ConnectionException.class)
@@ -179,7 +179,7 @@ class OpcUaSecurityTest {
         Path trustDir = exportTrustedCertificate(trustedStore, "trusted");
         Path untrustedStore = generateKeyStore("untrusted");
 
-        OpcUaProperties properties = secured(trustedStore.toString(), trustDir.toString(), null, null);
+        OpcUaProperties properties = secured(trustedStore.toString(), trustDir.toString(), null, null, null);
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties,
                 context(ref -> Optional.of(new CredentialResolver.Credential("u",
                         STORE_PASSWORD.toCharArray(), Map.of()))), "c1");
@@ -209,7 +209,7 @@ class OpcUaSecurityTest {
         Path keyStore = generateKeyStore("client");
         Path otherStore = generateKeyStore("other");
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(
-                secured(keyStore.toString(), null, null, Boolean.TRUE),
+                secured(keyStore.toString(), null, null, Boolean.TRUE, null),
                 context(ref -> Optional.of(new CredentialResolver.Credential("u",
                         STORE_PASSWORD.toCharArray(), Map.of()))), "c1");
         assertThatCode(() -> material.certificateValidator()
@@ -217,6 +217,30 @@ class OpcUaSecurityTest {
                         "urn:whatever", new String[] {"10.0.0.1"}))
                 .as("trust-all 必须放行任意服务端证书（仅开发用途）")
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("SEC-13 主机名校验必须是可选开关：默认关闭，开启后仍能通过（证书 SAN 含该地址）")
+    void hostnameVerificationIsOptional() throws Exception {
+        Path keyStore = generateKeyStore("client");
+        Path trustDir = exportTrustedCertificate(keyStore, "client");
+        AdapterContext ctx = context(ref -> Optional.of(new CredentialResolver.Credential("u",
+                STORE_PASSWORD.toCharArray(), Map.of())));
+
+        // 默认关闭：测试证书的 SAN 含 127.0.0.1，但这里传入一个不匹配的 host，仍应通过 ——
+        // 证明默认行为确实是「不校验主机名」（现场 IP 直连很常见）
+        OpcUaSecurity.Material lenient = OpcUaSecurity.prepare(
+                secured(keyStore.toString(), trustDir.toString(), null, null, null), ctx, "c1");
+        assertThatCode(() -> lenient.certificateValidator().validateCertificateChain(
+                List.of(readCertificate(keyStore)), "urn:ypbin:iot:test-server",
+                new String[] {"10.9.9.9"})).doesNotThrowAnyException();
+
+        // 开启主机名校验：地址匹配时必须通过（否则这个开关会变成「一开就连不上」）
+        OpcUaSecurity.Material strict = OpcUaSecurity.prepare(
+                secured(keyStore.toString(), trustDir.toString(), null, null, Boolean.TRUE), ctx, "c1");
+        assertThatCode(() -> strict.certificateValidator().validateCertificateChain(
+                List.of(readCertificate(keyStore)), "urn:ypbin:iot:test-server",
+                new String[] {"127.0.0.1"})).doesNotThrowAnyException();
     }
 
     @Test
@@ -268,7 +292,7 @@ class OpcUaSecurityTest {
                 "-file", trustDir.resolve("client.pem").toString());
 
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(
-                secured(keyStore.toString(), trustDir.toString(), null, null),
+                secured(keyStore.toString(), trustDir.toString(), null, null, null),
                 context(ref -> Optional.of(new CredentialResolver.Credential("u",
                         STORE_PASSWORD.toCharArray(), Map.of()))), "c1");
         X509Certificate certificate = readCertificate(keyStore);
@@ -288,11 +312,12 @@ class OpcUaSecurityTest {
     }
 
     private static OpcUaProperties plaintext() {
-        return new OpcUaProperties(true, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        return new OpcUaProperties(true, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
-    private static OpcUaProperties secured(String keyStore, String trustDir, String username, Boolean trustAll) {
-        return new OpcUaProperties(true, POLICY, "SIGN_AND_ENCRYPT", null, null, null, null, null, username, username == null ? null : "opcua-ref", keyStore, STORE_REF, trustDir, trustAll);
+    private static OpcUaProperties secured(String keyStore, String trustDir, String username,
+            Boolean trustAll, Boolean verifyHostname) {
+        return new OpcUaProperties(true, POLICY, "SIGN_AND_ENCRYPT", null, null, null, null, null, username, username == null ? null : "opcua-ref", keyStore, STORE_REF, trustDir, trustAll, null);
     }
 
     private AdapterContext context(CredentialResolver credentials) {
