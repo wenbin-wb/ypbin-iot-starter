@@ -22,7 +22,8 @@ import java.time.Duration;
  * 无操作指标实现：非 Spring 环境或未接入指标后端时使用。
  *
  * <p>不做任何记录的<b>同时也不吞掉语义</b>：指标本身是可选的横切能力，
- * 不记录不等于静默降级。Spring 环境下由 starter 装配 Micrometer 桥接实现覆盖它。</p>
+ * 不记录不等于静默降级。但要注意：<b>starter 目前装配的就是本实现</b>（Micrometer 桥尚未实现），
+ * 因此在未自行提供 {@code MetricsRecorder} 的应用里，指标是被丢弃的 —— 装配期会打 INFO 提示。</p>
  *
  * @author wenbin
  * @since 2026-09-13

@@ -170,7 +170,9 @@ final class ModbusTcpTestServer implements AutoCloseable {
         int functionCode = pdu[0] & 0xFF;
         return switch (functionCode) {
             case 0x01 -> readCoils(unitId, pdu);
+            case 0x02 -> readDiscreteInputs(unitId, pdu);
             case 0x03 -> readHoldingRegisters(unitId, pdu);
+            case 0x04 -> readInputRegisters(unitId, pdu);
             case 0x05 -> writeSingleCoil(unitId, pdu);
             case 0x06 -> writeSingleRegister(unitId, pdu);
             default -> exception(functionCode, EXCEPTION_ILLEGAL_FUNCTION);
@@ -190,6 +192,12 @@ final class ModbusTcpTestServer implements AutoCloseable {
                 response[2 + index / 8] |= (byte) (1 << (index % 8));
             }
         }
+        return response;
+    }
+
+    private byte[] readDiscreteInputs(int unitId, byte[] pdu) {
+        byte[] response = readCoils(unitId, pdu);
+        response[0] = 0x02;
         return response;
     }
 
@@ -213,6 +221,12 @@ final class ModbusTcpTestServer implements AutoCloseable {
             response[2 + index * 2] = (byte) ((value >> 8) & 0xFF);
             response[3 + index * 2] = (byte) (value & 0xFF);
         }
+        return response;
+    }
+
+    private byte[] readInputRegisters(int unitId, byte[] pdu) {
+        byte[] response = readHoldingRegisters(unitId, pdu);
+        response[0] = 0x04;
         return response;
     }
 

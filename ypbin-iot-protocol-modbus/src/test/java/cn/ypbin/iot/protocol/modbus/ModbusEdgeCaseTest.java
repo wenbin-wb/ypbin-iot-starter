@@ -23,6 +23,8 @@ import cn.ypbin.iot.core.context.DataEgress;
 import cn.ypbin.iot.core.exception.ConnectionException;
 import cn.ypbin.iot.core.exception.ProtocolException;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
+import cn.ypbin.iot.core.i18n.IotMessageKeys;
+import cn.ypbin.iot.core.model.CloseCause;
 import cn.ypbin.iot.core.model.CloseReason;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DataBatch;
@@ -32,6 +34,7 @@ import cn.ypbin.iot.core.model.Endpoint;
 import cn.ypbin.iot.core.model.PingResult;
 import cn.ypbin.iot.core.model.PointAddress;
 import cn.ypbin.iot.core.model.PointWrite;
+import cn.ypbin.iot.core.model.Quality;
 import cn.ypbin.iot.core.model.ReadRequest;
 import cn.ypbin.iot.core.model.ReadResult;
 import cn.ypbin.iot.core.model.SessionState;
@@ -111,9 +114,13 @@ class ModbusEdgeCaseTest {
             PointAddress address = PointAddress.of(type.getCode() + ":0");
             ReadResult result = session.read(new ReadRequest(List.of(address), Duration.ofSeconds(3)))
                     .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
-            assertThat(result).as("寄存器类型 %s 必须能产出结果（成功或明确失败），不得抛异常",
-                    type.getCode()).isNotNull();
+            assertThat(result).as("寄存器类型 %s 必须能产出结果", type.getCode()).isNotNull();
             assertThat(result.values()).hasSize(1);
+            // 必须断言 quality：只断言「不为空」的话，某类型静默失败也全绿，
+            // 用例名里的「都必须走通」就成了空话（复审逐行核对时发现了这一点）
+            assertThat(result.values().get(0).quality())
+                    .as("寄存器类型 %s 的读取必须成功（quality=GOOD）", type.getCode())
+                    .isEqualTo(Quality.GOOD);
         }
         // 地址形态：批量、以及越界长度（后者必须走「长度不足」分支）
         ReadResult bulk = session.read(new ReadRequest(List.of(
@@ -122,10 +129,11 @@ class ModbusEdgeCaseTest {
                 .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
         assertThat(bulk.values()).hasSize(3);
 
-        ReadResult overlong = session.read(new ReadRequest(List.of(
+        // 重复读同一批地址必须稳定产出（不是「越界长度」——原注释与代码不符，已更正）
+        ReadResult repeated = session.read(new ReadRequest(List.of(
                 PointAddress.of("holding:0"), PointAddress.of("holding:1")), Duration.ofSeconds(3)))
                 .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
-        assertThat(overlong.values()).isNotEmpty();
+        assertThat(repeated.values()).hasSize(2);
     }
 
     @Test
@@ -146,7 +154,10 @@ class ModbusEdgeCaseTest {
                     .isInstanceOf(UnsupportedCapabilityException.class);
             assertThat(connection.describe())
                     .as("describe 必须含端点与从站数（诊断入口）")
-                    .containsKeys("endpoint", "slaveCount");
+                    .containsEntry("slaveCount", "0");
+            assertThat(connection.describe().get("endpoint"))
+                    .as("endpoint 必须是实际连接的 URI，而不是空串或占位")
+                    .contains("127.0.0.1");
             // 传输层不提供协议扩展能力：任何类型都必须返回空，而不是抛异常
             assertThat(connection.unwrap(ModbusConnection.class)).isEmpty();
             assertThat(connection.unwrap(String.class)).isEmpty();
@@ -155,8 +166,13 @@ class ModbusEdgeCaseTest {
             connection.close();
         }
         assertThat(connection.state()).isEqualTo(SessionState.CLOSED);
-        assertThat(connection.whenClosed().toCompletableFuture()
-                .orTimeout(5, TimeUnit.SECONDS).join()).isNotNull();
+        CloseReason reason = connection.whenClosed().toCompletableFuture()
+                .orTimeout(5, TimeUnit.SECONDS).join();
+        // 必须断言原因：宿主的重连策略依赖「主动关闭 vs 意外断开」的区分，
+        // 只断言 not-null 等于什么都没验证
+        assertThat(reason.cause())
+                .as("本端调用 close() 必须以 CLIENT_REQUEST 完成，否则会被误判为意外断开而触发重连")
+                .isEqualTo(CloseCause.CLIENT_REQUEST);
     }
 
     @Test
@@ -170,10 +186,22 @@ class ModbusEdgeCaseTest {
         var result = adapter.probe(tlsSpec, context).toCompletableFuture()
                 .orTimeout(10, TimeUnit.SECONDS).join();
         assertThat(result.reachable()).isFalse();
+        // 钉死**具体**原因：只断言「不等于某个常量」的话，把所有失败换成另一个固定常量
+        // （例如 iot.common.config.invalid）照样能通过 —— 那仍是另一种折叠。
         assertThat(result.failureReason())
-                .as("TLS 未实现属配置错误，必须原样带出，不得折叠成 MSG_CONNECTION_INACTIVE")
-                .isNotBlank()
-                .isNotEqualTo(ModbusAdapter.MSG_CONNECTION_INACTIVE);
+                .as("TLS 未实现属配置错误，必须带出该原因本身")
+                .isEqualTo(IotMessageKeys.CONFIG_INVALID);
+
+        // 对照：不可达端点必须得到**另一个**原因，证明 probe 能区分原因
+        ConnectionSpec deadSpec = new ConnectionSpec("probe-dead", ModbusAdapter.PROTOCOL_CODE,
+                Endpoint.of("modbus+tcp://127.0.0.1:1"), Duration.ofMillis(500), Duration.ofMillis(500),
+                null, null, Map.of());
+        var deadResult = adapter.probe(deadSpec, context).toCompletableFuture()
+                .orTimeout(10, TimeUnit.SECONDS).join();
+        assertThat(deadResult.reachable()).isFalse();
+        assertThat(deadResult.failureReason())
+                .as("配置错误与端点不可达必须是不同原因，否则仍是一种折叠")
+                .isNotEqualTo(result.failureReason());
     }
 
     @Test

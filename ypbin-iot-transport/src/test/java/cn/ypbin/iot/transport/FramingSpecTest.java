@@ -135,7 +135,12 @@ class FramingSpecTest {
         assertThat(FramingSpec.none()).isNotEqualTo(FramingSpec.lengthField1Byte(1024));
         assertThat(FramingSpec.lengthField1Byte(1024)).isEqualTo(FramingSpec.lengthField1Byte(1024));
         assertThat(FramingSpec.lengthField1Byte(1024)).isNotEqualTo(FramingSpec.lengthField1Byte(2048));
-        assertThat(FramingSpec.none().hashCode()).isEqualTo(FramingSpec.none().hashCode());
-        assertThat(FramingSpec.delimiter(new byte[] {'\n'}, 100).toString()).isNotBlank();
+        // 长度字段模式的其余参数也必须参与相等性（原用例名声称「每种模式」，实际只比了帧长）
+        assertThat(new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, 2, 0, 0, null))
+                .isNotEqualTo(new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 1, 2, 0, 0, null));
+        assertThat(new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, 2, 4, 0, null))
+                .isNotEqualTo(new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, 2, 0, 0, null));
+        assertThat(new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, 2, 0, 2, null))
+                .isNotEqualTo(new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, 2, 0, 0, null));
     }
 }

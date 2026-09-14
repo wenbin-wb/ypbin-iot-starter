@@ -1507,6 +1507,33 @@ reactor 内部制品**（core/runtime）去跑测试。**判定产品是否回�
 不带 `-am` 的红是环境病理，但也不能因此就当成噪声忽略——它这条教训的另一面是
 「**同一模块，两个命令给出不同结论时，必须先解释清楚差异再下结论**」。
 
+**第八轮审核整改（2026-09-14）**：5 个 P1 全部修复，其中 **4 处是我自己写错的结论**。
+
+| 编号 | 问题 | 修复 |
+|---|---|---|
+| **F4** | **TCP 的 probe 仍在折叠配置错误**——我声称「三个协议模块不再折叠」却漏了第四个协议 | `TcpAdapter` 改用 `Stages.messageKeyOf`；补 `TCP-PROBE-CFG`（含「配置错误与端点不可达必须是**不同**原因」的对照断言）|
+| **F3** | **SEC-08 对四项 checks 无门禁作用**：复审用变异测试证明把 `checks` 改成 `Set.of()`（全删）后原用例仍 9/9 全绿 | 补 `SEC-10`（缺 nonRepudiation）/`SEC-11`（SAN 缺匹配 uri）/`SEC-12`（自签缺 keyCertSign）；`SEC-08` 负向断言从 `isInstanceOf(Exception)` 收紧为钉住原因。**用同一变异反向验证：现在报 BUILD FAILURE** |
+| **F13** | 我写的根因**错误**：keyCertSign 不是「被按信任锚(CA)校验」 | 改为准确机制（`checkEndEntityKeyUsage` 对**自签**终端实体的额外要求）；删除从未被读取的 `cRLSign` |
+| **F1** | 我写的部署建议**错误且会误导**：「信任目录只放叶子做精确 pin」对 CA 签发的叶子**根本连不上**（`trustAnchors must be non-empty`）| 改为准确的部署对照表：自签叶子=精确 pin / CA=信任整个 CA（可 MITM）/ CA 签发的叶子=不可用 |
+| **F2** | 我写在代码注释里的 keytool 命令**实测不通过**（缺 nonRepudiation）| 已更正 |
+| F5 | `MBE-TYPES` 的 FC02/FC04 实际走**异常分支**（测试服务器只实现 0x01/0x03），用例名「都必须走通」失实 | 测试服务器补 FC02/FC04，断言改为 `quality == GOOD`；删除与代码不符的「越界长度」注释 |
+| F7 | 分支余量归因不实（`MBE-CONN` 贡献 **0** 条分支）| 按复审逐行核对更正 |
+| F9 | `MBE-PROBE-CFG` 只断言「不等于某常量」，换成另一个常量照样通过 | 钉死正确键 + 加不同原因的对照断言 |
+| F10 | `isNotNull()`、`toString().isNotBlank()` 等空断言 | `whenClosed` 断言 `CloseCause.CLIENT_REQUEST`；`describe` 断言值；删除空断言改为真正的按值比较 |
+| F11 | README/DESIGN/接口注释宣称「starter 桥接 Micrometer」，实际只装配 Noop → **指标静默丢弃** | 三处宣称改为「默认无操作，宿主自行提供」；装配期提示从 DEBUG 提升为 **INFO** 并明说 DISCARDED |
+| **F12** | `docs/SPI.md` 出现**两块连续 Javadoc**（我的编辑事故）| 已合并 |
+| F6 | `MetricsRecorder` 线程模型表述不准 | 按实测改写：落点有四类（Netty event loop / 协议库回调 / 调度器 / 调用方线程），**共享 IO 线程最危险**；并补进接口源码（原来只在文档）|
+
+**未修（如实登记）**：F8 覆盖率数字存在 ±0.5pp 不可复现噪声（并发分支：`ConnectionRegistry`、
+`EgressRouter` 的内部时序分支），因此余量表的精度被高估；F14 `HOSTNAME`/`APPLICATION_URI` 的比对值
+来自服务端自述，对**主动 MITM 无防护**，且会误拒「同证书多设备宣告不同 ApplicationUri」；
+**OPC UA 与真实 SignAndEncrypt 服务端的握手仍未完成**。
+
+> **第九条流程教训**：本轮 5 个 P1 里**有 4 个是我自己写错的文档/注释结论**（F1/F2/F13 + F7 的归因）。
+> 它们都不是代码缺陷，而是**我把推理当成了实测**——尤其 F1 那条会把用户推向一个连不上的部署。
+> 已固化：**文档里凡是「怎么做才能通」的具体命令/部署建议，必须有一条实测用例支撑**，
+> 否则只能写成「未验证」。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |
