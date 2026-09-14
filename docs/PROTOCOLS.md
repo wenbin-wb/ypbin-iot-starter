@@ -1210,6 +1210,37 @@ M0 不是「搭个空壳」，而是**把"能跑"这件事变成可验证事实*
 - `BrowseExtension` 是本仓**唯一尚未被任何协议实现的扩展点**；OPC UA 的 `browse` 是其天然落点，
   落地时应同时验证「扩展点从 `ProtocolConnection.unwrap` 取出」这条链路。
 
+**M1 第二轮独立审核结果（2 份报告，7 个 P0，已全部修复）**
+
+审核方式：审核 agent 用 `/tmp` 下的探针 harness **直接调用仓库已编译的真实类**做实证复现（仓库零改动），
+因此下列结论都带可复现证据，而非静态推断。
+
+| 来源 | P0 问题 | 实证证据 | 修复 |
+|---|---|---|---|
+| 框架 | **令牌桶永不封顶**：`Math.min(capacity, ...)` 的结果算完丢弃，只有溢出为负才回写 | 空闲 5s 后 500 令牌变 **3024**；1200 次取令牌 **7ms** 跑完（应 ≥1400ms）。Spring 启动耗时数秒即触发，正好命中「启动风暴」这个唯一目标场景 | `updateAndGet(v -> min(capacity, v + refill))` |
+| 框架 | **令牌等待持读锁** → `closeAll()`（需写锁）无界阻塞 | 6 并发 / 2 每秒即阻塞 **2958ms**；10 万 / 500 每秒外推 ≈ **200s** | 改三段式：入表 → 释放锁等待 → 重新取锁复核条目仍是自己的 |
+| 框架 | `refillTokens` 定点乘法溢出 → 永久卡死 | rate=200000、1 天空闲 → 取令牌**永不返回**，桶恒 0 | 改「整秒 + 余数纳秒」的溢出安全写法 |
+| Modbus | **忽略 `spec.tls()` → 配了 TLS 仍明文建链** | 实测 `TlsOptions.enabledDefault()` + `tcp://` → **OPENED over PLAINTEXT** | 独立再拦一次 + 防复发用例 MBE-01b |
+| Modbus | **静默假死不可检测**：keep-alive 只看本端 `isConnected()`；`read()` 任何情况都不异常完成 | 对端 accept 后永不响应 → `read` 正常完成、全 BAD、`state()=ONLINE`、`ping().alive=true` | keep-alive 改发真实协议请求；read 在「链路不可用且全部点位失败」时异常完成 |
+| MQTT | **非法发布主题打挂整批写** | 批量 `[ok, 坏(+), ok]` → 整批异常完成、第 3 项未执行；空主题 → **同步抛出** | 主题校验 + builder 段 try/catch → 逐项失败 |
+| MQTT | **scheme 与真实承载不符** | `ssl/mqtts/ws/wss` 全部 **OPENED against 明文 broker**，与 README 承诺直接矛盾 | 移出白名单 |
+| MQTT | **断线永不通知框架**：`onConnectionLost` 是死代码 | broker 永久不可达时 `whenClosed` 永不完成、`state` 永为 ONLINE、`ping` 永远 alive | 注册 `addDisconnectedListener` 接线 |
+
+**本轮修复动作自身引入、并被自查/复审发现的问题（已修）**：
+- `ModbusSession.read` 在 `thenApply` 内 throw → 被包成 `CompletionException`，违反 C11 → 加 `Stages.normalize`
+- `MqttAdapter` 用实例字段 `pendingConnection` 承载断线回调是**共享可变状态**（适配器是单例、可服务多条链路，
+  A 断线会把 B 标记为 FAILED）→ 改用 `open()` 内的局部 holder
+- Modbus 链路级失败判定会误伤「全部地址都写错」的配置错误 → 收紧为「本来有合法点位」
+
+> **流程教训（第二次同类）**：本轮又出现「修复动作本身引入新缺陷」。上一轮的教训是「提交信息与代码不一致」，
+> 这一轮是「改完不复审就会引入新问题」——两轮都说明：**改动之后必须再跑一次独立复审，且不能由改动者自己判定完成**。
+
+**尚未修复（复审提出，按优先级列入下轮）**：MQTT `dispatch()` 在 broker IO 线程同步执行宿主 `DataListener`
+（DESIGN 承诺的 `ThreadIdentityGuard` 全仓不存在）· `PollingSubscriptionManager` 的 `deliver()` 抛异常会让订阅
+静默停摆、`samplingInterval<=0` 无校验（实测 200ms 内 6.5~7.9 万次轮询独占单定时器线程）· 空闲关闭后无重连/重绑定
+（`reconnect*` 配置零消费，框架自报「已绑定」而实际不可用）· `IotLifecycle.bind` 未持设备级锁（并发 bind 泄漏
+session 与 handle）· SRC-01 门禁漏判第三方包名内联 FQCN（`NettyTransport` 现存一处 R10 违规）。
+
 **M1 的取舍与实测结论**：
 - **MQTT 基线定在 3.1.1 而非 5.0**：测试过程中发现 Moquette 只支持 3.1.1，
   进而复核了工业现场的实际分布——绝大多数 broker 与设备只支持 3.1.1，5.0 专属能力在现场几乎用不上。
