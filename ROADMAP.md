@@ -35,11 +35,12 @@
   - ✅ 注册发现：**已有**（`IotAutoConfigurationTest.CFG-08` 已做 SpringFactoriesLoader 发现，不重复建设）
   - ✅ 编码规则（printStackTrace/System.out/字段注入/Collections）：**已有**（`ARCH-05`）
 - ✅ `tools/`：`check-nullaway.sh`（含执行自检）+ `preflight.sh`（发布前总检）；缺跨模块元数据**导出**脚本
-- ⬜ 发布前置：GPG + `central-publishing-maven-plugin` 接入
+- ✅ 发布前置：GPG + `central-publishing-maven-plugin`（在根 pom 的 release profile；`-Prelease` 反应堆已实测不含非发布模块）
+- ⬜ 发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号
 
 ## M2 · 协议扩容（⬜）
 
-- ⬜ OPC UA 用户名令牌端到端验证（服务端需 `UserTokenPolicy` + 身份校验器）
+- ✅ OPC UA 用户名令牌端到端验证（`SEC-E2E-02` 通过令牌认证读到数据；`SEC-E2E-03` 证明错误口令被拒）
 - ⬜ Modbus RTU 真实硬件验证
 - ⬜ 指标桥（Micrometer）——当前默认无操作实现，**指标会被丢弃**
 - ⬜ GB/T 26875（消防）双版本

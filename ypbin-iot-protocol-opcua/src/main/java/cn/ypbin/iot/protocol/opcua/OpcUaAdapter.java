@@ -162,7 +162,7 @@ public final class OpcUaAdapter implements ProtocolAdapter {
      */
     public OpcUaAdapter(OpcUaProperties properties) {
         this.properties = properties == null ? new OpcUaProperties(null, null, null, null, null, null,
-                null, null, null, null, null, null, null) : properties;
+                null, null, null, null, null, null, null, null) : properties;
     }
 
     @Override

@@ -92,20 +92,25 @@ class OpcUaSecuredSessionTest {
 
     private DefaultTaskScheduler scheduler;
 
+    private Path keyStorePath;
+
+    private Path trustDirPath;
+
     @BeforeEach
     void setUp() throws Exception {
         KeyPair clientKeyPair = SelfSignedCertificateGenerator.generateRsaKeyPair(RSA_KEY_SIZE);
         X509Certificate clientCertificate = generateClientCertificate(clientKeyPair);
         Path keyStore = writeKeyStore(clientKeyPair, clientCertificate);
+        this.keyStorePath = keyStore;
 
         server = new OpcUaTestServer(clientCertificate);
 
         // 客户端信任目录：放入服务端证书
         Path trustDir = Files.createDirectories(tempDir.resolve("trusted"));
         Files.copy(server.serverCertificateFile(), trustDir.resolve("server.der"));
+        this.trustDirPath = trustDir;
 
-        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null,
-                null, null, null, null, "opcua-ref", keyStore.toString(), trustDir.toString(), null);
+        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null, null, null, null, null, "opcua-ref", keyStore.toString(), "keystore-ref", trustDir.toString(), null);
         scheduler = new DefaultTaskScheduler(2, 64);
         adapter = new OpcUaAdapter(properties);
     }
@@ -150,6 +155,82 @@ class OpcUaSecuredSessionTest {
         } finally {
             connection.close();
         }
+    }
+
+    @Test
+    @DisplayName("SEC-E2E-02 用户名密码令牌必须能在加密会话上真正通过服务端校验")
+    void usernameTokenMustWorkEndToEnd() {
+        // 这条用例是「③ 至少用户名密码 + 证书管理器接入」中**用户名密码**那一半的验证。
+        // 之前只证明了 UsernameProvider 能被装配出来 —— 那与「服务端真的接受它」是两回事。
+        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null,
+                null, null, null, OpcUaTestServer.USERNAME, "user-ref", keyStorePath.toString(),
+                "keystore-ref", trustDirPath.toString(), null);
+        OpcUaAdapter secured = new OpcUaAdapter(properties);
+        AdapterContext securedContext = contextWithCredentials(Map.of(
+                "user-ref", OpcUaTestServer.PASSWORD,
+                "keystore-ref", STORE_PASSWORD));
+
+        ConnectionSpec spec = new ConnectionSpec("secured-user", OpcUaAdapter.PROTOCOL_CODE,
+                Endpoint.of(server.endpointUrl()), Duration.ofSeconds(20), Duration.ofSeconds(20),
+                null, "user-ref", Map.of());
+        ProtocolConnection connection = secured.open(spec, securedContext).toCompletableFuture()
+                .orTimeout(60, TimeUnit.SECONDS).join();
+        try {
+            assertThat(connection.state())
+                    .as("用户名令牌会话必须建立在加密通道上")
+                    .isEqualTo(SessionState.ONLINE);
+            DeviceSession session = secured.bind(connection, device(), securedContext)
+                    .toCompletableFuture().orTimeout(30, TimeUnit.SECONDS).join();
+            ReadResult result = session.read(new ReadRequest(
+                    List.of(PointAddress.of(server.nodeAddress("Temperature"))), Duration.ofSeconds(20)))
+                    .toCompletableFuture().orTimeout(30, TimeUnit.SECONDS).join();
+            assertThat(result.values().get(0).quality())
+                    .as("用户名认证通过后数据面必须可用")
+                    .isEqualTo(Quality.GOOD);
+        } finally {
+            connection.close();
+            secured.close();
+        }
+    }
+
+    @Test
+    @DisplayName("SEC-E2E-03 口令错误必须被服务端拒绝（证明 SEC-E2E-02 不是「配了就行」）")
+    void wrongPasswordMustBeRejected() {
+        OpcUaProperties properties = new OpcUaProperties(true, POLICY, "SignAndEncrypt", null, null,
+                null, null, null, OpcUaTestServer.USERNAME, "user-ref", keyStorePath.toString(),
+                "keystore-ref", trustDirPath.toString(), null);
+        OpcUaAdapter secured = new OpcUaAdapter(properties);
+        AdapterContext wrongContext = contextWithCredentials(Map.of(
+                "user-ref", "definitely-not-the-password",
+                "keystore-ref", STORE_PASSWORD));
+        ConnectionSpec spec = new ConnectionSpec("secured-bad-user", OpcUaAdapter.PROTOCOL_CODE,
+                Endpoint.of(server.endpointUrl()), Duration.ofSeconds(20), Duration.ofSeconds(20),
+                null, "user-ref", Map.of());
+        Throwable error = secured.open(spec, wrongContext).toCompletableFuture()
+                .handle((connection, ex) -> {
+                    if (connection != null) {
+                        connection.close();
+                    }
+                    return ex;
+                })
+                .orTimeout(60, TimeUnit.SECONDS).join();
+        try {
+            assertThat(error)
+                    .as("口令错误必须被服务端拒绝 —— 否则 SEC-E2E-02 只能证明「配了就不拦」")
+                    .isNotNull();
+        } finally {
+            secured.close();
+        }
+    }
+
+    private AdapterContext contextWithCredentials(Map<String, String> credentials) {
+        return new DefaultAdapterContext(OpcUaAdapter.PROTOCOL_CODE, DefaultAdapterSettings.defaults(),
+                new NoopEgress(), scheduler, NoopMetricsRecorder.INSTANCE,
+                ref -> credentials.containsKey(ref)
+                        ? Optional.of(new CredentialResolver.Credential(ref,
+                                credentials.get(ref).toCharArray(), Map.of()))
+                        : Optional.empty(),
+                Clock.systemUTC(), 16);
     }
 
     private AdapterContext context() {

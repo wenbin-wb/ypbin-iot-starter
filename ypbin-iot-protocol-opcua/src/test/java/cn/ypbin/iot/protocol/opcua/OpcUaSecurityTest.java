@@ -60,6 +60,9 @@ class OpcUaSecurityTest {
 
     private static final String STORE_PASSWORD = "changeit";
 
+    /** keystore 口令的凭据引用（与 OPC UA 用户口令的 ref 分开）。 */
+    private static final String STORE_REF = "keystore-ref";
+
     private static final String POLICY = "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256";
 
     @TempDir
@@ -285,12 +288,11 @@ class OpcUaSecurityTest {
     }
 
     private static OpcUaProperties plaintext() {
-        return new OpcUaProperties(true, null, null, null, null, null, null, null, null, null, null, null, null);
+        return new OpcUaProperties(true, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static OpcUaProperties secured(String keyStore, String trustDir, String username, Boolean trustAll) {
-        return new OpcUaProperties(true, POLICY, "SIGN_AND_ENCRYPT", null, null, null, null, null,
-                username, username == null ? null : "opcua-ref", keyStore, trustDir, trustAll);
+        return new OpcUaProperties(true, POLICY, "SIGN_AND_ENCRYPT", null, null, null, null, null, username, username == null ? null : "opcua-ref", keyStore, STORE_REF, trustDir, trustAll);
     }
 
     private AdapterContext context(CredentialResolver credentials) {

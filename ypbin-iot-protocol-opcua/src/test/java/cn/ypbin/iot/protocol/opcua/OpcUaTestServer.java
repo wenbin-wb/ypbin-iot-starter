@@ -35,6 +35,9 @@ import org.eclipse.milo.opcua.sdk.server.ManagedNamespace;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfig;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfigBuilder;
+import org.eclipse.milo.opcua.sdk.server.identity.AnonymousIdentityValidator;
+import org.eclipse.milo.opcua.sdk.server.identity.CompositeValidator;
+import org.eclipse.milo.opcua.sdk.server.identity.UsernameIdentityValidator;
 import org.eclipse.milo.opcua.sdk.server.items.DataItem;
 import org.eclipse.milo.opcua.sdk.server.items.MonitoredItem;
 import org.eclipse.milo.opcua.sdk.server.nodes.AttributeObserver;
@@ -53,6 +56,8 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.UserTokenType;
+import org.eclipse.milo.opcua.stack.core.types.structured.UserTokenPolicy;
 import org.eclipse.milo.opcua.stack.core.util.SelfSignedCertificateGenerator;
 import org.eclipse.milo.opcua.stack.transport.server.OpcServerTransportFactory;
 import org.eclipse.milo.opcua.stack.transport.server.tcp.OpcTcpServerTransport;
@@ -88,6 +93,11 @@ final class OpcUaTestServer implements AutoCloseable {
     private static final int CERT_VALIDITY_DAYS = 365;
 
     private static final String SIGNATURE_ALGORITHM = "SHA256withRSA";
+
+    /** 测试用用户名与口令（服务端身份校验器据此裁决）。 */
+    static final String USERNAME = "operator";
+
+    static final String PASSWORD = "opcua-secret";
 
     /** 标量值等级（OPC UA 规范：-1 表示标量）。 */
     private static final int SCALAR_VALUE_RANK = -1;
@@ -147,6 +157,10 @@ final class OpcUaTestServer implements AutoCloseable {
                     .setCertificateManager(new DefaultCertificateManager(quarantine,
                             new TestCertificateGroup(serverKeyPair, serverCertificate, trustList,
                                     serverValidator)))
+                    .setIdentityValidator(new CompositeValidator(AnonymousIdentityValidator.INSTANCE,
+                            new UsernameIdentityValidator(challenge -> USERNAME.equals(
+                                    challenge.getUsername())
+                                    && PASSWORD.equals(challenge.getPassword()))))
                     .setEndpoints(Set.of(plaintext.build(), EndpointConfig.newBuilder()
                             .setBindAddress("127.0.0.1")
                             .setBindPort(port)
@@ -154,6 +168,12 @@ final class OpcUaTestServer implements AutoCloseable {
                             .setSecurityPolicy(SecurityPolicy.Basic256Sha256)
                             .setSecurityMode(MessageSecurityMode.SignAndEncrypt)
                             .setCertificate(serverCertificate)
+                            // 两种令牌都要宣告：只宣告用户名会让匿名用例变成「no anonymous
+                            // token policy found」——服务端宣告什么，客户端才可能选什么
+                            .addTokenPolicy(new UserTokenPolicy("anonymous", UserTokenType.Anonymous,
+                                    null, null, null))
+                            .addTokenPolicy(new UserTokenPolicy("username", UserTokenType.UserName, null,
+                                    null, null))
                             .build()));
         }
         OpcUaServerConfig config = configBuilder.build();

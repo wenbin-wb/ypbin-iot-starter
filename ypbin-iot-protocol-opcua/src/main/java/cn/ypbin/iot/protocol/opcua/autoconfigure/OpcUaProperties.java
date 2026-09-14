@@ -31,8 +31,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param browseMaxDepth     浏览最大深度
  * @param browseMaxNodes     浏览最大节点数（防止在大型地址空间上失控）
  * @param username           用户名；配置后表示使用用户名密码认证
- * @param credentialRef      凭据引用（从 {@code CredentialResolver} 取密码/keystore 口令，不落配置文件）
+ * @param credentialRef      凭据引用：**OPC UA 用户名对应的口令**（从 {@code CredentialResolver} 取，不落配置文件）
  * @param clientKeyStore     客户端 PKCS#12 证书路径；非 None 策略时必填
+ * @param clientKeyStorePasswordRef keystore 口令的凭据引用（**与用户口令分开**，见 {@code credentialRef}）
  * @param trustListDir       信任证书目录（存放服务端证书文件）；非 None 策略且未开 trust-all 时必填
  * @param trustAll           是否信任全部服务端证书（**仅开发环境**，开启会打 WARN）
  * @author wenbin
@@ -51,6 +52,7 @@ public record OpcUaProperties(
         @Nullable String username,
         @Nullable String credentialRef,
         @Nullable String clientKeyStore,
+        @Nullable String clientKeyStorePasswordRef,
         @Nullable String trustListDir,
         @Nullable Boolean trustAll) {
 

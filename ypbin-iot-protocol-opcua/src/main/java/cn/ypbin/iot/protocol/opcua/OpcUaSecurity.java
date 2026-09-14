@@ -117,8 +117,8 @@ final class OpcUaSecurity {
         if (properties.hasCredentials()) {
             return new Material(keyMaterial.keyPair(), keyMaterial.certificate(),
                     validatorOf(properties, connectionId),
-                    new UsernameProvider(properties.username(), resolvePassword(properties, context,
-                            connectionId)));
+                    new UsernameProvider(properties.username(), resolvePassword(properties,
+                            properties.credentialRef(), "user password", context, connectionId)));
         }
         return new Material(keyMaterial.keyPair(), keyMaterial.certificate(),
                 validatorOf(properties, connectionId), null);
@@ -186,7 +186,14 @@ final class OpcUaSecurity {
 
     private static KeyMaterial readKeyMaterial(OpcUaProperties properties, AdapterContext context,
             String connectionId) {
-        char[] password = resolvePassword(properties, context, connectionId).toCharArray();
+        // keystore 口令与 OPC UA 用户口令是两回事，必须分别引用 ——
+        // 混用同一个 ref 会让「改了用户口令」意外导致证书读不出来（复审指出过这个语义混淆）
+        String keyStorePasswordRef = properties.clientKeyStorePasswordRef() != null
+                && !properties.clientKeyStorePasswordRef().isBlank()
+                        ? properties.clientKeyStorePasswordRef()
+                        : properties.credentialRef();
+        char[] password = resolvePassword(properties, keyStorePasswordRef, "keystore password", context,
+                connectionId).toCharArray();
         Path path = Path.of(properties.clientKeyStore());
         if (!Files.isRegularFile(path)) {
             throw new ConnectionException(connectionId, OpcUaAdapter.MSG_KEYSTORE_MISSING,
@@ -288,19 +295,18 @@ final class OpcUaSecurity {
         return certificates;
     }
 
-    private static String resolvePassword(OpcUaProperties properties, AdapterContext context,
-            String connectionId) {
-        Optional<CredentialResolver.Credential> resolved =
-                context.credentials().resolve(properties.credentialRef());
+    private static String resolvePassword(OpcUaProperties properties, String ref, String what,
+            AdapterContext context, String connectionId) {
+        Optional<CredentialResolver.Credential> resolved = context.credentials().resolve(ref);
         if (resolved.isEmpty()) {
             // 绝不回落到配置文件里的明文：凭据必须来自宿主的安全存储
             throw new ConnectionException(connectionId, OpcUaAdapter.MSG_CREDENTIAL_MISSING,
-                    String.valueOf(properties.credentialRef()));
+                    what + " ref=" + ref);
         }
         char[] secret = resolved.get().secret();
         if (secret == null || secret.length == 0) {
             throw new ConnectionException(connectionId, OpcUaAdapter.MSG_CREDENTIAL_MISSING,
-                    "empty secret for " + properties.credentialRef());
+                    "empty " + what + " for ref=" + ref);
         }
         return new String(secret);
     }

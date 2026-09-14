@@ -27,6 +27,8 @@
 ### 已知限制
 
 - **尚未发布**：`0.1.0-SNAPSHOT` 只在本地/CI 构建，Maven Central 上无此坐标。
+- **OPC UA 用户名密码认证**：已在 `Basic256Sha256 + SignAndEncrypt` 上完成端到端验证
+  （`SEC-E2E-02`），并有「错误口令必须被拒」的反向用例（`SEC-E2E-03`）守着他。
 - **OPC UA**：非 None 安全策略下，信任目录放「CA 签发的叶子证书」**不可用**
   （Milo 只把自签证书当信任锚），需放自签叶子或整个 CA；两个可选校验
   （`HOSTNAME` / `APPLICATION_URI`）的比对值来自服务端自述，**对主动 MITM 无防护**。
