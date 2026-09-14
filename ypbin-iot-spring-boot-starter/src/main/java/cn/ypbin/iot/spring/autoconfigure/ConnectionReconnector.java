@@ -83,7 +83,7 @@ final class ConnectionReconnector implements AutoCloseable {
 
     private final AtomicLong totalRecovered = new AtomicLong();
 
-    private final AtomicLong totalGivenUp = new AtomicLong();
+
 
     /**
      * 创建调度器。
@@ -197,15 +197,6 @@ final class ConnectionReconnector implements AutoCloseable {
         return totalRecovered.get();
     }
 
-    /**
-     * 因链路已被显式关闭而放弃重连的次数。
-     *
-     * @return 放弃次数
-     */
-    long totalGivenUp() {
-        return totalGivenUp.get();
-    }
-
     private void scheduleOnce(String connectionId, Duration delay) {
         Attempt attempt = attempts.get(connectionId);
         if (attempt == null || closed.get()) {
@@ -216,7 +207,30 @@ final class ConnectionReconnector implements AutoCloseable {
         attempt.scheduled = scheduler.scheduleOnce(() -> runAttempt(connectionId), delay);
     }
 
+    /**
+     * 执行一次重连尝试。
+     *
+     * <p><b>必须切到平台线程池</b>：重连动作内部会做阻塞式 `join`（acquire + bind 都有超时等待），
+     * 而 `scheduleOnce` 跑在调度器的<b>单线程 timer</b> 上。直接在 timer 上执行会阻塞
+     * 同 JVM 的全部定时任务——包括所有轮询订阅、空闲回收与保活探测。
+     * 一次限速窗口（令牌桶 sleep）就能把整个调度器拖停。</p>
+     */
     private void runAttempt(String connectionId) {
+        Attempt attempt = attempts.get(connectionId);
+        if (attempt == null || closed.get()) {
+            return;
+        }
+        try {
+            scheduler.platformThreadExecutor().execute(() -> executeAttempt(connectionId));
+        } catch (RuntimeException ex) {
+            // 平台池拒绝（停机中）：按一次失败处理并继续退避，绝不静默
+            log.warn("[ypbin-iot] failed to schedule reconnect attempt for connection {}; backing off",
+                    connectionId, ex);
+            attemptFinished(connectionId, false);
+        }
+    }
+
+    private void executeAttempt(String connectionId) {
         Attempt attempt = attempts.get(connectionId);
         if (attempt == null || closed.get()) {
             return;

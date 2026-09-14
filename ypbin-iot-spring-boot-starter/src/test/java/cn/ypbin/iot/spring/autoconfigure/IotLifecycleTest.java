@@ -312,6 +312,48 @@ class IotLifecycleTest {
     }
 
     @Test
+    @DisplayName("LIFE-14 连续两次意外断开都必须恢复（重连不得只能生效一次）")
+    void reconnectMustWorkRepeatedly() {
+        DefaultTaskScheduler shortScheduler = new DefaultTaskScheduler(2, 64);
+        DefaultAdapterSettings fastBackoff = new DefaultAdapterSettings(true,
+                Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
+                Duration.ofMillis(30), Duration.ofMillis(120), 0.0D, 100, 64, Map.of());
+        AdapterContext reconnectContext = new DefaultAdapterContext(CODE, fastBackoff,
+                new NoopEgress(), shortScheduler, NoopMetricsRecorder.INSTANCE,
+                ref -> Optional.empty(), Clock.systemUTC(), 32);
+        AdapterRegistry registry = new AdapterRegistry(List.of(adapter), Map.of(CODE, reconnectContext));
+        ConnectionRegistry connections = new ConnectionRegistry(Duration.ofMinutes(5), 100, shortScheduler,
+                Clock.systemUTC());
+        IotLifecycle lifecycle = new IotLifecycle(registry, connections,
+                List.of(new StubDeviceRegistry(ValidationResult.ok())),
+                List.of(new StubSpecProvider(true)), properties, shortScheduler);
+        try {
+            assertThat(lifecycle.bind(device())).isTrue();
+
+            // 第一次断开 → 必须恢复
+            adapter.lastConnection().simulateRemoteClose();
+            awaitUntil(() -> lifecycle.reconnectRecovered() >= 1, Duration.ofSeconds(10));
+            assertThat(lifecycle.reconnectRecovered()).isEqualTo(1);
+            int opensAfterFirst = adapter.openInvocations();
+
+            // 第二次断开（此时链路上是重连产生的**新实例**）→ 必须同样恢复。
+            // 原实现以 connectionId 为键记录「已挂监听」，新实例永远挂不上监听，
+            // 于是第二次之后永久离线且 reconnectingCount==0（看起来只是没数据）。
+            adapter.lastConnection().simulateRemoteClose();
+            awaitUntil(() -> lifecycle.reconnectRecovered() >= 2, Duration.ofSeconds(10));
+            assertThat(lifecycle.reconnectRecovered())
+                    .as("重连必须可重复生效（第一次恢复后第二次断开仍需恢复）")
+                    .isEqualTo(2);
+            assertThat(adapter.openInvocations()).isGreaterThan(opensAfterFirst);
+            awaitUntil(() -> lifecycle.sessionCount() == 1, Duration.ofSeconds(5));
+            assertThat(lifecycle.sessionCount()).isEqualTo(1);
+        } finally {
+            lifecycle.close();
+            shortScheduler.close();
+        }
+    }
+
+    @Test
     @DisplayName("LIFE-13 主动解绑必须取消重连，不得把设备重新绑回来")
     void explicitUnbindMustCancelReconnect() {
         DefaultTaskScheduler shortScheduler = new DefaultTaskScheduler(2, 64);

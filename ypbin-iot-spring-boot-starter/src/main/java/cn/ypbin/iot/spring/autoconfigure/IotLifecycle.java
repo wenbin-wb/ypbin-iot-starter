@@ -229,6 +229,18 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
                         device.deviceId(), ex);
                 return false;
             }
+            if (closed.get()) {
+                // close() 与在途 bind 交错：绑定期间生命周期已被关闭，必须立即撤销，
+                // 否则 close() 返回后仍残留永不释放的会话（它不在 close 的快照里）
+                session.close().toCompletableFuture()
+                        .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                        .exceptionally(ex -> null)
+                        .join();
+                handle.release();
+                log.warn("[ypbin-iot] lifecycle closed during bind; device {} rolled back.",
+                        device.deviceId());
+                return false;
+            }
             sessions.put(device.deviceId(), session);
             handles.put(device.deviceId(), handle);
             deviceSpecs.put(device.deviceId(), effective);
@@ -378,6 +390,11 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             return;
         }
         connection.whenClosed().whenComplete((reason, error) -> {
+            // 必须先摘掉监听标记：意外断开后注册中心会摘除条目，重连会 open 出**全新的
+            // ProtocolConnection 实例**，而标记是按 connectionId 记账的 —— 不在这里摘掉，
+            // 新实例的 watchConnection 会因 add 失败而直接 return，
+            // 结果是「第一次断开能恢复、第二次之后永久离线」（该缺陷已被复审实测确证）。
+            watchedConnections.remove(connectionId);
             // 主动关闭（框架停机 / 设备解绑）不重连；只有意外断开才恢复
             if (closed.get()) {
                 return;
@@ -408,10 +425,19 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         for (String deviceId : List.copyOf(deviceIds)) {
             DeviceSpec spec = deviceSpecs.get(deviceId);
             if (spec == null) {
+                // 该设备已在重连期间被移除：跳过是正确行为，但**不能算作恢复成功**
+                allBound = false;
                 continue;
             }
             if (!bind(spec)) {
                 allBound = false;
+                continue;
+            }
+            if (!deviceSpecs.containsKey(deviceId)) {
+                // 绑定期间该设备被 REMOVE：撤销刚建立的绑定，否则被删除的设备会被永久复活
+                unbind(deviceId);
+                allBound = false;
+                log.debug("[ypbin-iot] device {} was removed during reconnect; bind rolled back.", deviceId);
             }
         }
         return allBound;

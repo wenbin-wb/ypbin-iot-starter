@@ -467,6 +467,15 @@ public interface AdapterContext {
      *
      * @return 调度器，永不为 {@code null}
      */
+    /**
+     * 宿主回调投递器。
+     *
+     * <p><b>协议实现调用宿主回调必须经此投递</b>，不得在协议库的回调线程上直接执行宿主代码。</p>
+     *
+     * @return 投递器
+     */
+    DeliveryDispatcher delivery();
+
     TaskScheduler scheduler();
 
     /**

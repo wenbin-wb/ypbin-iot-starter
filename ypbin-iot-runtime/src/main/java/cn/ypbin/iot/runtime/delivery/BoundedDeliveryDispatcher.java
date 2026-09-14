@@ -50,6 +50,11 @@ public final class BoundedDeliveryDispatcher implements DeliveryDispatcher, Auto
     /** 丢弃告警的最小间隔：避免过载时日志风暴反过来打死进程。 */
     private static final Duration DROP_LOG_INTERVAL = Duration.ofSeconds(5);
 
+    /** 关闭时等待在途宿主回调的上限（有界：回调卡死不得把停机一起卡死）。 */
+    private static final Duration DRAIN_TIMEOUT = Duration.ofSeconds(5);
+
+    private static final long DRAIN_POLL_MILLIS = 10L;
+
     private final ExecutorService executor;
 
     private final Semaphore capacity;
@@ -112,6 +117,15 @@ public final class BoundedDeliveryDispatcher implements DeliveryDispatcher, Auto
             log.warn("[ypbin-iot] delivery executor rejected a host callback; is the scheduler shutting down?",
                     ex);
             return false;
+        } catch (RuntimeException ex) {
+            // 只捕 RejectedExecutionException 是不够的：执行器抛其它异常时
+            // 许可与在途计数会永久泄漏（容量为 1 时此后所有回调都被静默丢弃），
+            // 且异常会逃逸到协议线程。这里归还款项并计数，绝不静默。
+            inFlight.decrementAndGet();
+            capacity.release();
+            drop("executor failed to accept task");
+            log.error("[ypbin-iot] delivery executor failed to accept a host callback", ex);
+            return false;
         }
     }
 
@@ -145,11 +159,33 @@ public final class BoundedDeliveryDispatcher implements DeliveryDispatcher, Auto
         }
     }
 
+    /**
+     * 关闭投递器，并<b>有界等待在途宿主回调完成</b>。
+     *
+     * <p>不能只置位就返回：投递器先于 `TaskScheduler` 关闭，而在途回调可能正写到一半
+     * （JDBC / HTTP）。等一小段再返回，能让它们跑完而不是被随后的
+     * {@code shutdownNow()} 打断成「半途而废且无任何计数」。</p>
+     *
+     * <p>等待是有界的：宿主回调卡死时绝不能把停机也一起卡死。</p>
+     */
     @Override
     public void close() {
         closed = true;
-        // 不关闭共享的 virtualThreadExecutor：它由 TaskScheduler 统一负责生命周期
-        log.debug("[ypbin-iot] delivery dispatcher closed (dropped {} total, {} in flight).",
-                dropped.get(), inFlight.get());
+        long deadline = System.nanoTime() + DRAIN_TIMEOUT.toNanos();
+        while (inFlight.get() > 0 && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(DRAIN_POLL_MILLIS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        int remaining = inFlight.get();
+        if (remaining > 0) {
+            log.warn("[ypbin-iot] delivery dispatcher closed with {} host callback(s) still in flight; "
+                    + "they may be interrupted by scheduler shutdown.", remaining);
+        } else {
+            log.debug("[ypbin-iot] delivery dispatcher closed (dropped {} total).", dropped.get());
+        }
     }
 }

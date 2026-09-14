@@ -1256,7 +1256,7 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 | 设计点 | 取舍与理由 |
 |---|---|
 | 回调经 `DeliveryDispatcher` 投递到框架虚拟线程 | 宿主阻塞不再占用协议线程；这是把 I4 从「约定」变成「结构性保证」 |
-| **有界**（信号量，默认 4096，复用 `maxPendingRequests`） | 只丢到执行器会无限堆积 → 吃光内存。有界准入是有意为之 |
+| **有界**（信号量，上限取 `AdapterSettings.maxPendingRequests`，框架默认 64） | 只丢到执行器会无限堆积 → 吃光内存。有界准入是有意为之 |
 | 过载**丢弃 + 计数 + 限流告警**，而非阻塞等位 | dispatch 在协议线程上被调用，在这里等待＝把背压原样传回 EventLoop，正是要避免的事；采集业务里「丢一批并告警」比「拖死链路」安全 |
 | 宿主回调抛异常**记录但不中断后续投递** | 单个宿主的 bug 不应让整条订阅静默停摆 |
 | 关闭后投递**计数丢弃** | 不能让宿主以为回调还在送达 |
@@ -1265,8 +1265,33 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 `OpcUaSession.dispatch`、`TcpSession`。测试 `BoundedDeliveryDispatcherTest` 5 用例
 锁定四条不变量（不阻塞调用线程、过载有界丢弃并计数、宿主异常不影响后续、关闭后计数丢弃）。
 
+**回调异步化带来的语义变化（必须知道）**：投递到虚拟线程后，**同一订阅内回调的执行顺序不再保证**
+（每条回调独立调度）。`DataEgress` 路径仍按设备有序（`EgressRouter` 的 `coalesce` 保序），
+但 `DataListener` 路径不再有序。若宿主依赖逐点位顺序，应改用 `DataEgress` 或在回调内自行排序。
+另外 `unsubscribe()` / `close()` 返回时，**已递交但未执行**的回调可能仍会执行一次——
+协议实现在投递前会检查订阅是否仍活跃，但无法收回已经开始执行的回调。
+
 > 注：`egress.emit` 本就不需要改造 —— `EgressRouter` 自身就是「入队 + 独立消费线程 + 有界丢弃计数」，
 > 在协议线程上只是一次入队。真正的问题只在**宿主 listener 的同步回调**。
+
+**第五轮审核（对本轮重连与投递器）发现的 2 个 P0 + 5 个 P1，已修复**
+
+| 级别 | 问题 | 实证 | 修复 |
+|---|---|---|---|
+| **P0** | **重连只能生效一次**：`watchedConnections` 以 `connectionId` 为键记「已挂监听」，而重连产生的是**全新的 `ProtocolConnection` 实例**，其 `watchConnection` 因 `add` 失败直接 return | 实测：第一次断开恢复成功；第二次断开后 `openInvocations` 不再增长、`reconnectingCount()==0` —— **看起来只是没数据** | 在 `whenClosed` 回调首行摘掉监听标记；新增 LIFE-14 用例锁定「连续两次都必须恢复」 |
+| **P0** | **重连动作跑在单线程 timer 上**：`reconnect → bind → acquire` 含阻塞 `join` 与令牌桶 `sleep`，而 `scheduleOnce` 用的是调度器**唯一**的 timer 线程 → 阻塞同 JVM 全部定时任务（所有轮询订阅、空闲回收、保活） | 代码论证 + `orTimeout` 包不住同步 sleep | 重连尝试切到 `platformThreadExecutor()` 执行 |
+| P1 | REMOVE 与重连交错 → 被移除设备被**复活**且永久在册 | 实测 `sessionsAfterRemove=1` | 绑定后复核设备仍被登记，否则撤销绑定 |
+| P1 | `close()` 与在途 `bind` 交错 → close 之后仍绑上会话，永不释放 | 实测 `sessionsAfterClose=1` | 绑定后复核 `closed`，已关闭则回滚并归还句柄 |
+| P1 | 投递器 `close()` 不 drain，在途宿主回调被随后的 `shutdownNow()` **打断**（半途而废、无计数无日志） | 实测 `callbackInterruptedBySchedulerClose=true` | 有界 drain（上限 5s），剩余量告警 |
+| P1 | 只捕 `RejectedExecutionException` → 其它异常使**信号量许可永久泄漏**（容量为 1 时此后全被静默丢弃）且异常逃逸到协议线程 | 实测 `inFlight=1 ... secondDispatchAccepted=false` | 补 `catch (RuntimeException)` 归还许可并计数 |
+| P1 | 文档未同步：`AdapterContext.delivery()` 与新接口 `DeliveryDispatcher` 均未进 SPI.md；容量口径写成 4096 而实际取 `maxPendingRequests`（默认 64） | — | 两处文档已同步 |
+
+**本轮审核同时确认「回调异步化」带来了语义变化，已显式写入文档**：同一订阅内回调的**执行顺序不再保证**；
+`unsubscribe()`/`close()` 返回时，已递交未执行的回调可能仍会执行一次。
+`DataEgress` 路径仍按设备有序，但 `DataListener` 路径不再有序 —— 依赖逐点位顺序的宿主应改用 `DataEgress`。
+
+> 又一次印证：**行覆盖率 90.5% 不代表功能可用**。本轮两个 P0（重连只生效一次、重连阻塞全局定时器）
+> 都躺在「覆盖率已达标」的代码里，靠独立复审实测才暴露。分支覆盖率仅 68%（starter）才是更诚实的信号。
 
 **M1 已落地协议模块（2026-09-13）**
 
