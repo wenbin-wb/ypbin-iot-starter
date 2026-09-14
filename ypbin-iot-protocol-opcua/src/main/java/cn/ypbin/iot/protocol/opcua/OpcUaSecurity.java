@@ -295,8 +295,14 @@ final class OpcUaSecurity {
         return certificates;
     }
 
-    private static String resolvePassword(OpcUaProperties properties, String ref, String what,
+    private static String resolvePassword(OpcUaProperties properties, @Nullable String ref, String what,
             AdapterContext context, String connectionId) {
+        if (ref == null || ref.isBlank()) {
+            // ref 未配置本身就是配置错误：明确说出缺的是哪个配置项，
+            // 而不是让它在 CredentialResolver 里变成一个语焉不详的「解析不到」
+            throw new ConnectionException(connectionId, OpcUaAdapter.MSG_CREDENTIAL_MISSING,
+                    what + "：未配置对应的凭据引用（credential-ref / client-key-store-password-ref）");
+        }
         Optional<CredentialResolver.Credential> resolved = context.credentials().resolve(ref);
         if (resolved.isEmpty()) {
             // 绝不回落到配置文件里的明文：凭据必须来自宿主的安全存储
