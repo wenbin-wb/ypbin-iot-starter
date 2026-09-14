@@ -16,23 +16,30 @@
 package cn.ypbin.iot.spring.autoconfigure;
 
 import cn.ypbin.iot.core.context.AdapterContext;
+import cn.ypbin.iot.core.context.AdapterSettings;
+import cn.ypbin.iot.core.context.TaskScheduler;
+import cn.ypbin.iot.core.model.CloseCause;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.ProbeResult;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolAdapter;
+import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.spi.ChangeType;
 import cn.ypbin.iot.core.spi.ConnectionSpecProvider;
 import cn.ypbin.iot.core.spi.DeviceChange;
 import cn.ypbin.iot.core.spi.DeviceRegistry;
 import cn.ypbin.iot.core.spi.ValidationResult;
+import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.registry.AdapterRegistry;
 import cn.ypbin.iot.runtime.registry.ConnectionRegistry;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -87,6 +94,18 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
+    /** 重连退避调度（按 connectionId 独立）。 */
+    private final ConnectionReconnector reconnector;
+
+    /** 设备当前生效的规格：重连时必须用同一份规格重新绑定。 */
+    private final Map<String, DeviceSpec> deviceSpecs = new ConcurrentHashMap<>();
+
+    /** 链路 → 该链路上的设备集合（1:N 链路重连时要一起恢复）。 */
+    private final Map<String, Set<String>> devicesByConnection = new ConcurrentHashMap<>();
+
+    /** 已挂上 whenClosed 监听的链路，避免同一链路重复挂监听导致重复重连。 */
+    private final Set<String> watchedConnections = ConcurrentHashMap.newKeySet();
+
     /**
      * 创建生命周期编排器。
      *
@@ -98,12 +117,15 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
      */
     public IotLifecycle(AdapterRegistry adapterRegistry, ConnectionRegistry connectionRegistry,
             List<DeviceRegistry> deviceRegistries, List<ConnectionSpecProvider> specProviders,
-            IotProperties properties) {
+            IotProperties properties, TaskScheduler taskScheduler) {
         this.adapterRegistry = adapterRegistry;
         this.connectionRegistry = connectionRegistry;
         this.deviceRegistries = deviceRegistries == null ? List.of() : List.copyOf(deviceRegistries);
         this.specProviders = specProviders == null ? List.of() : List.copyOf(specProviders);
         this.properties = properties;
+        this.reconnector = new ConnectionReconnector(
+                Objects.requireNonNull(taskScheduler, "taskScheduler must not be null"),
+                this::reconnect);
     }
 
     @Override
@@ -187,7 +209,8 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         }
         try {
             // 同一设备重复绑定：先释放旧会话与旧引用，否则旧引用永不归还、连接只增不减
-            unbind(device.deviceId());
+            // 注意用 detach 而非 unbind：重连路径会走到这里，不能把归属与重连一起清掉
+            detach(device.deviceId());
             ConnectionRegistry.ConnectionHandle handle = connectionRegistry
                     .acquire(adapter, specOptional.get(), context)
                     .toCompletableFuture()
@@ -208,6 +231,12 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             }
             sessions.put(device.deviceId(), session);
             handles.put(device.deviceId(), handle);
+            deviceSpecs.put(device.deviceId(), effective);
+            devicesByConnection
+                    .computeIfAbsent(device.connectionId(), ignored -> ConcurrentHashMap.newKeySet())
+                    .add(device.deviceId());
+            // 绑定成功即挂监听：链路意外关闭时这台设备要能自动恢复
+            watchConnection(device.connectionId(), handle.connection());
             log.debug("[ypbin-iot] device {} bound to session {}.", device.deviceId(), session.sessionId());
             return true;
         } catch (RuntimeException ex) {
@@ -242,8 +271,29 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
      * @return 此前存在绑定或句柄则返回 {@code true}
      */
     public boolean unbind(String deviceId) {
+        boolean detached = detach(deviceId);
+        // 公开的 unbind 语义是「这台设备不再接入」：连归属一起清除，
+        // 若它是该链路最后一台设备则停掉重连（否则会为一条没人用的链路反复重试）
+        forgetDevice(deviceId);
+        return detached;
+    }
+
+    /**
+     * 仅断开设备与会话/句柄的关联，**不清除归属**。
+     *
+     * <p>供重连路径使用：{@code reconnect → bind → 先 detach 再 bind}，
+     * 若这里连归属一起清除，重连会把自己取消掉（该缺陷已被 LIFE-12 用例实证）。</p>
+     *
+     * @param deviceId 设备标识
+     * @return 此前存在会话或句柄则返回 {@code true}
+     */
+    private boolean detach(String deviceId) {
         DeviceSession session = sessions.remove(deviceId);
         ConnectionRegistry.ConnectionHandle handle = handles.remove(deviceId);
+        // 注意：这里**不**清除设备归属（deviceSpecs / devicesByConnection）。
+        // unbind 也被「重连路径」调用（reconnect → bind → 先 unbind 再 bind），
+        // 若在此清除归属并取消重连，重连会把自己取消掉（该缺陷已被 LIFE-12 用例实证）。
+        // 归属只在「设备被显式移除」（onDeviceChange REMOVE）或生命周期关闭时清除。
         if (session != null) {
             session.close().toCompletableFuture()
                     .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
@@ -281,6 +331,7 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             appliedRevisions.put(deviceId, change.revision());
             if (change.type() == ChangeType.REMOVE) {
                 unbind(deviceId);
+                forgetDevice(deviceId);
                 deviceLocks.remove(deviceId);
                 appliedRevisions.remove(deviceId);
                 return;
@@ -292,6 +343,127 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         } finally {
             deviceLock.unlock();
         }
+    }
+
+    /**
+     * 彻底忘记一台设备（显式移除时调用）：清除归属，并在该链路已无设备承载时停掉重连。
+     *
+     * @param deviceId 设备标识
+     */
+    private void forgetDevice(String deviceId) {
+        DeviceSpec bound = deviceSpecs.remove(deviceId);
+        if (bound == null) {
+            return;
+        }
+        Set<String> peers = devicesByConnection.get(bound.connectionId());
+        if (peers == null) {
+            return;
+        }
+        peers.remove(deviceId);
+        if (peers.isEmpty()) {
+            // 该链路已无设备承载：停掉重连，避免为一条没人用的链路反复重试
+            devicesByConnection.remove(bound.connectionId());
+            watchedConnections.remove(bound.connectionId());
+            reconnector.cancel(bound.connectionId());
+        }
+    }
+
+    /**
+     * 监听链路关闭。
+     *
+     * <p>只挂一次：同一链路上 N 台设备各挂一次监听会让一次断开触发 N 次重连调度。</p>
+     */
+    private void watchConnection(String connectionId, ProtocolConnection connection) {
+        if (!watchedConnections.add(connectionId)) {
+            return;
+        }
+        connection.whenClosed().whenComplete((reason, error) -> {
+            // 主动关闭（框架停机 / 设备解绑）不重连；只有意外断开才恢复
+            if (closed.get()) {
+                return;
+            }
+            CloseCause cause = reason == null ? CloseCause.TRANSPORT_ERROR : reason.cause();
+            if (cause == CloseCause.CLIENT_REQUEST) {
+                log.debug("[ypbin-iot] connection {} closed on request; no reconnect.", connectionId);
+                return;
+            }
+            log.warn("[ypbin-iot] connection {} closed unexpectedly ({}); scheduling reconnect.",
+                    connectionId, cause);
+            reconnector.schedule(connectionId, settingsOf(connectionId));
+        });
+    }
+
+    /**
+     * 重连一条链路：把该链路上的全部设备重新绑定。
+     *
+     * <p>必须整体成功才算恢复 —— 一台设备绑定失败说明链路仍不可用，
+     * 继续退避比「部分恢复」更安全（部分恢复会让退避节奏与实际可用性脱节）。</p>
+     */
+    private boolean reconnect(String connectionId) {
+        Set<String> deviceIds = devicesByConnection.get(connectionId);
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return true;
+        }
+        boolean allBound = true;
+        for (String deviceId : List.copyOf(deviceIds)) {
+            DeviceSpec spec = deviceSpecs.get(deviceId);
+            if (spec == null) {
+                continue;
+            }
+            if (!bind(spec)) {
+                allBound = false;
+            }
+        }
+        return allBound;
+    }
+
+    /**
+     * 取某条链路的退避参数。
+     *
+     * <p>退避参数属于「链路所属协议」的适配器设置；链路已在 devicesByConnection 中，
+     * 但这里拿不到协议，因此从该链路上任一设备的规格反查。</p>
+     */
+    private AdapterSettings settingsOf(String connectionId) {
+        Set<String> deviceIds = devicesByConnection.get(connectionId);
+        if (deviceIds != null) {
+            for (String deviceId : deviceIds) {
+                DeviceSpec spec = deviceSpecs.get(deviceId);
+                if (spec != null) {
+                    Optional<AdapterContext> context = adapterRegistry.contextOf(spec.protocol());
+                    if (context.isPresent()) {
+                        return context.get().settings();
+                    }
+                }
+            }
+        }
+        return DefaultAdapterSettings.defaults();
+    }
+
+    /**
+     * 正在重连的链路数（诊断用）。
+     *
+     * @return 链路数
+     */
+    public int reconnectingCount() {
+        return reconnector.activeCount();
+    }
+
+    /**
+     * 累计重连尝试次数（诊断用）。
+     *
+     * @return 尝试次数
+     */
+    public long reconnectAttempts() {
+        return reconnector.totalAttempts();
+    }
+
+    /**
+     * 累计恢复次数（诊断用）。
+     *
+     * @return 恢复次数
+     */
+    public long reconnectRecovered() {
+        return reconnector.totalRecovered();
     }
 
     /**
@@ -333,10 +505,14 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        // 必须先停重连：否则关闭过程中被解绑的设备会被重连逻辑重新绑回来
+        reconnector.close();
         int count = sessions.size();
         for (String deviceId : new ArrayList<>(sessions.keySet())) {
             unbind(deviceId);
         }
+        devicesByConnection.clear();
+        watchedConnections.clear();
         log.debug("[ypbin-iot] lifecycle closed, {} session(s) released.", count);
     }
 

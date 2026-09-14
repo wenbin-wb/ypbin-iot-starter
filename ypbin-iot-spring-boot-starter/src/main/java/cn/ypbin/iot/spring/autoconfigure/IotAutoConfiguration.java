@@ -218,11 +218,13 @@ public class IotAutoConfiguration {
     @ConditionalOnMissingBean
     public IotLifecycle iotLifecycle(AdapterRegistry adapterRegistry, ConnectionRegistry connectionRegistry,
             ObjectProvider<DeviceRegistry> deviceRegistries,
-            ObjectProvider<ConnectionSpecProvider> specProviders, IotProperties properties) {
+            ObjectProvider<ConnectionSpecProvider> specProviders, IotProperties properties,
+            TaskScheduler taskScheduler) {
         List<DeviceRegistry> registries = deviceRegistries.orderedStream().toList();
         List<ConnectionSpecProvider> providers = specProviders.orderedStream().toList();
         log.debug("[ypbin-iot] iotLifecycle configured (deviceRegistries={}, specProviders={}).",
                 registries.size(), providers.size());
-        return new IotLifecycle(adapterRegistry, connectionRegistry, registries, providers, properties);
+        return new IotLifecycle(adapterRegistry, connectionRegistry, registries, providers, properties,
+                taskScheduler);
     }
 }

@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.DataEgress;
+import cn.ypbin.iot.core.model.CloseCause;
 import cn.ypbin.iot.core.model.CloseReason;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DataBatch;
@@ -118,7 +119,7 @@ class IotLifecycleTest {
     void bindMustSucceedAndCloseMustRelease() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
                 List.of(new StubDeviceRegistry(ValidationResult.ok())),
-                List.of(new StubSpecProvider(true)), properties);
+                List.of(new StubSpecProvider(true)), properties, scheduler);
         assertThat(lifecycle.bind(device())).isTrue();
         assertThat(lifecycle.sessionCount()).isEqualTo(1);
         assertThat(lifecycle.sessions()).containsKey("d1");
@@ -136,7 +137,7 @@ class IotLifecycleTest {
     void validationFailureMustRejectDevice() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
                 List.of(new StubDeviceRegistry(ValidationResult.fail("iot.test.invalid"))),
-                List.of(new StubSpecProvider(true)), properties);
+                List.of(new StubSpecProvider(true)), properties, scheduler);
         assertThat(lifecycle.bind(device())).isFalse();
         assertThat(lifecycle.sessionCount()).isZero();
     }
@@ -146,7 +147,7 @@ class IotLifecycleTest {
     void missingSpecMustRejectDevice() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
                 List.of(new StubDeviceRegistry(ValidationResult.ok())),
-                List.of(new StubSpecProvider(false)), properties);
+                List.of(new StubSpecProvider(false)), properties, scheduler);
         assertThat(lifecycle.bind(device())).isFalse();
         assertThat(lifecycle.sessionCount()).isZero();
     }
@@ -155,7 +156,7 @@ class IotLifecycleTest {
     @DisplayName("LIFE-04 未注册协议的设备必须被拒绝")
     void unknownProtocolMustBeRejected() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
-                List.of(), List.of(new StubSpecProvider(true)), properties);
+                List.of(), List.of(new StubSpecProvider(true)), properties, scheduler);
         DeviceSpec unknown = new DeviceSpec("d2", "未知", ProtocolCode.of("absent"), CONNECTION_ID, "",
                 Duration.ZERO, Map.of());
         assertThat(lifecycle.bind(unknown)).isFalse();
@@ -165,7 +166,7 @@ class IotLifecycleTest {
     @DisplayName("LIFE-05 无 DeviceRegistry 时启动钩子必须安全返回")
     void applicationReadyWithoutRegistryMustBeSafe() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry, List.of(),
-                List.of(), properties);
+                List.of(), properties, scheduler);
         lifecycle.onApplicationEvent(null);
         assertThat(lifecycle.sessionCount()).isZero();
     }
@@ -177,7 +178,7 @@ class IotLifecycleTest {
                 new IotProperties.DeviceProperties(false, null, null), null);
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
                 List.of(new StubDeviceRegistry(ValidationResult.ok())),
-                List.of(new StubSpecProvider(true)), disabled);
+                List.of(new StubSpecProvider(true)), disabled, scheduler);
         lifecycle.onApplicationEvent(null);
         assertThat(lifecycle.sessionCount()).isZero();
     }
@@ -186,7 +187,7 @@ class IotLifecycleTest {
     @DisplayName("LIFE-07 探测必须委托给适配器并返回结果")
     void probeMustDelegateToAdapter() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry, List.of(),
-                List.of(), properties);
+                List.of(), properties, scheduler);
         ProbeResult result = lifecycle.probe(spec()).toCompletableFuture().join();
         assertThat(result.reachable()).isTrue();
 
@@ -200,7 +201,7 @@ class IotLifecycleTest {
     void failingRegistryMustNotAbortBootstrap() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
                 List.of(new FailingDeviceRegistry(), new StubDeviceRegistry(ValidationResult.ok())),
-                List.of(new StubSpecProvider(true)), properties);
+                List.of(new StubSpecProvider(true)), properties, scheduler);
         lifecycle.onApplicationEvent(null);
         assertThat(lifecycle.sessionCount()).as("第二个来源的设备仍应被接入").isEqualTo(1);
     }
@@ -211,7 +212,7 @@ class IotLifecycleTest {
         adapter.failBind = true;
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
                 List.of(new StubDeviceRegistry(ValidationResult.ok())),
-                List.of(new StubSpecProvider(true)), properties);
+                List.of(new StubSpecProvider(true)), properties, scheduler);
         assertThat(lifecycle.bind(device())).isFalse();
         assertThat(lifecycle.sessionCount()).isZero();
         // 归还引用后空闲回收才能生效：把超时压到很小再验证链路被回收
@@ -219,7 +220,7 @@ class IotLifecycleTest {
                 Clock.systemUTC());
         IotLifecycle second = new IotLifecycle(adapterRegistry, shortIdle,
                 List.of(new StubDeviceRegistry(ValidationResult.ok())),
-                List.of(new StubSpecProvider(true)), properties);
+                List.of(new StubSpecProvider(true)), properties, scheduler);
         assertThat(second.bind(device())).isFalse();
         awaitUntil(() -> shortIdle.activeCount() == 0, Duration.ofSeconds(3));
         assertThat(shortIdle.activeCount())
@@ -233,7 +234,7 @@ class IotLifecycleTest {
     @DisplayName("LIFE-10 close 之后不得再接受绑定")
     void bindAfterCloseMustBeRejected() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
-                List.of(), List.of(new StubSpecProvider(true)), properties);
+                List.of(), List.of(new StubSpecProvider(true)), properties, scheduler);
         lifecycle.close();
         assertThat(lifecycle.bind(device()))
                 .as("关闭后仍接受绑定会让新链路永久无人释放")
@@ -246,7 +247,7 @@ class IotLifecycleTest {
     void deviceChangeChannelMustBeWired() {
         StubDeviceRegistry registry = new StubDeviceRegistry(ValidationResult.ok());
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
-                List.of(registry), List.of(new StubSpecProvider(true)), properties);
+                List.of(registry), List.of(new StubSpecProvider(true)), properties, scheduler);
         lifecycle.onApplicationEvent(null);
         assertThat(registry.listener)
                 .as("框架必须在启动后注册变更监听器，否则运行期增删设备完全无效")
@@ -269,18 +270,93 @@ class IotLifecycleTest {
         lifecycle.close();
     }
 
+
+    @Test
+    @DisplayName("LIFE-12 链路意外关闭必须自动重连并重新绑定设备")
+    void unexpectedCloseMustTriggerReconnect() {
+        DefaultTaskScheduler shortScheduler = new DefaultTaskScheduler(2, 64);
+        // 退避压到很短，让用例可快速观察到重连
+        DefaultAdapterSettings fastBackoff = new DefaultAdapterSettings(true,
+                Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
+                Duration.ofMillis(30), Duration.ofMillis(120), 0.0D, 100, 64, Map.of());
+        AdapterContext reconnectContext = new DefaultAdapterContext(CODE, fastBackoff,
+                new NoopEgress(), shortScheduler, NoopMetricsRecorder.INSTANCE,
+                ref -> Optional.empty(), Clock.systemUTC(), 32);
+        AdapterRegistry registry = new AdapterRegistry(List.of(adapter), Map.of(CODE, reconnectContext));
+        ConnectionRegistry connections = new ConnectionRegistry(Duration.ofMinutes(5), 100, shortScheduler,
+                Clock.systemUTC());
+        IotLifecycle lifecycle = new IotLifecycle(registry, connections,
+                List.of(new StubDeviceRegistry(ValidationResult.ok())),
+                List.of(new StubSpecProvider(true)), properties, shortScheduler);
+        try {
+            assertThat(lifecycle.bind(device())).isTrue();
+            assertThat(adapter.openInvocations()).isEqualTo(1);
+
+            // 对端异常关闭：注册中心会摘除条目，框架应安排重连
+            adapter.lastConnection().simulateRemoteClose();
+            awaitUntil(() -> adapter.openInvocations() >= 2, Duration.ofSeconds(10));
+            assertThat(adapter.openInvocations())
+                    .as("链路意外关闭后必须自动重连（原实现零重连，一次抖动即永久离线）")
+                    .isGreaterThanOrEqualTo(2);
+            // 必须以「恢复计数」为等待条件：sessionCount 在重连前就已为 1（旧会话尚未释放），
+            // 用它等待会让断言跑在退避到期之前，从而测不到真正的重连
+            awaitUntil(() -> lifecycle.reconnectRecovered() > 0, Duration.ofSeconds(10));
+            assertThat(lifecycle.reconnectRecovered()).as("必须记录一次恢复").isPositive();
+            assertThat(lifecycle.sessionCount()).as("重连后设备必须仍然绑定").isEqualTo(1);
+            awaitUntil(() -> lifecycle.reconnectingCount() == 0, Duration.ofSeconds(10));
+            assertThat(lifecycle.reconnectingCount()).as("恢复后不得再处于重连中").isZero();
+        } finally {
+            lifecycle.close();
+            shortScheduler.close();
+        }
+    }
+
+    @Test
+    @DisplayName("LIFE-13 主动解绑必须取消重连，不得把设备重新绑回来")
+    void explicitUnbindMustCancelReconnect() {
+        DefaultTaskScheduler shortScheduler = new DefaultTaskScheduler(2, 64);
+        DefaultAdapterSettings fastBackoff = new DefaultAdapterSettings(true,
+                Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
+                Duration.ofMillis(200), Duration.ofMillis(400), 0.0D, 100, 64, Map.of());
+        AdapterContext reconnectContext = new DefaultAdapterContext(CODE, fastBackoff,
+                new NoopEgress(), shortScheduler, NoopMetricsRecorder.INSTANCE,
+                ref -> Optional.empty(), Clock.systemUTC(), 32);
+        AdapterRegistry registry = new AdapterRegistry(List.of(adapter), Map.of(CODE, reconnectContext));
+        ConnectionRegistry connections = new ConnectionRegistry(Duration.ofMinutes(5), 100, shortScheduler,
+                Clock.systemUTC());
+        IotLifecycle lifecycle = new IotLifecycle(registry, connections, List.of(),
+                List.of(new StubSpecProvider(true)), properties, shortScheduler);
+        try {
+            assertThat(lifecycle.bind(device())).isTrue();
+            adapter.lastConnection().simulateRemoteClose();
+            // 在退避到期前解绑：重连必须被取消
+            assertThat(lifecycle.unbind("d1")).isTrue();
+            assertThat(lifecycle.reconnectingCount()).as("解绑后不得残留重连状态").isZero();
+            sleep(700L);
+            assertThat(lifecycle.sessionCount())
+                    .as("已解绑的设备不得被重连逻辑重新绑回来")
+                    .isZero();
+        } finally {
+            lifecycle.close();
+            shortScheduler.close();
+        }
+    }
+
     private static void awaitUntil(java.util.function.BooleanSupplier condition, Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         while (System.nanoTime() < deadline) {
             if (condition.getAsBoolean()) {
                 return;
             }
-            try {
-                Thread.sleep(10L);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                return;
-            }
+            sleep(10L);
+        }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -382,7 +458,14 @@ class IotLifecycleTest {
 
         private volatile StubConnection lastConnection;
 
+        private final java.util.concurrent.atomic.AtomicInteger openInvocations =
+                new java.util.concurrent.atomic.AtomicInteger();
+
         private boolean failBind;
+
+        private int openInvocations() {
+            return openInvocations.get();
+        }
 
         @Override
         public ProtocolDescriptor descriptor() {
@@ -391,6 +474,7 @@ class IotLifecycleTest {
 
         @Override
         public CompletionStage<ProtocolConnection> open(ConnectionSpec spec, AdapterContext context) {
+            openInvocations.incrementAndGet();
             StubConnection connection = new StubConnection(spec.connectionId());
             lastConnection = connection;
             return CompletableFuture.completedFuture(connection);
@@ -439,6 +523,13 @@ class IotLifecycleTest {
 
         private void attach(StubSession stubSession) {
             this.session = stubSession;
+        }
+
+        /** 模拟对端异常关闭（非主动关闭），用于验证重连。 */
+        private void simulateRemoteClose() {
+            closed.set(true);
+            closeReason.complete(new CloseReason(CloseCause.REMOTE_CLOSED, "remote closed", null,
+                    Instant.now()));
         }
 
         @Override
