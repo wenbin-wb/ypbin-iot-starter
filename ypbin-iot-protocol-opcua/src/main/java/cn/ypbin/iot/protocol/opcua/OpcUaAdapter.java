@@ -46,6 +46,7 @@ import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.SessionActivityListener;
 import org.eclipse.milo.opcua.sdk.client.UaSession;
 import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -266,8 +267,14 @@ public final class OpcUaAdapter implements ProtocolAdapter {
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties, context, spec.connectionId());
         return OpcUaClient.create(endpointUrl,
                 endpoints -> selectEndpoint(endpoints, spec),
-                // 传输配置保持默认：握手超时由外层 orTimeout 统一施加（见 createAndConnect）
-                transportConfig -> { },
+                transportConfig -> {
+                    // 必须把库内部的超时也设成同一个值：OpcUaClient.create 内部会做端点发现，
+                    // 用的是 Milo 默认超时（connect 5s + acknowledge 5s）。若只在外层 orTimeout，
+                    // 两者就在赛跑——超时到底由谁触发不确定，表现为偶发失败（本仓实测到过 TCK 偶发超时）。
+                    UInteger timeout = UInteger.valueOf(Math.max(1L, spec.connectTimeout().toMillis()));
+                    transportConfig.setConnectTimeout(timeout);
+                    transportConfig.setAcknowledgeTimeout(timeout);
+                },
                 config -> {
                     config.setKeyPair(material.keyPair());
                     config.setCertificate(material.certificate());

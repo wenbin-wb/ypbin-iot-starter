@@ -1476,6 +1476,20 @@ keytool -genkeypair -alias client -keyalg RSA -keysize 2048 -validity 365 \
   持有单个 keypair+证书、信任列表含客户端证书的实现。
 - 服务端还需 `addTokenPolicy(UserTokenPolicy)` 才能验证用户名密码令牌。
 
+**补测与两处真实缺陷（2026-09-14）**
+
+| 项 | 内容 |
+|---|---|
+| probe 配置错误用例 | 三个模块补齐：`MBE-PROBE-CFG`（TLS）、`MQE-PROBE-CFG`（TLS）、`OPC-PROBE-CFG`（非 None 策略缺 keystore）—— 全部断言 `failureReason` **不是** `MSG_CONNECTION_INACTIVE`。此前 5 处 probe 调用没有一处探测配置错误，上一轮「带出真实原因」的改动**等于没被验证**，现在被验证了 |
+| **Milo 内部超时未接线**（真实缺陷） | `OpcUaClient.create` 内部的端点发现用的是 Milo 默认超时（connect 5s + acknowledge 5s），而外层还有 `orTimeout(connectTimeout)` —— **两者在赛跑**，超时由谁触发不确定。已在 `transportConfig` 里把 `setConnectTimeout`/`setAcknowledgeTimeout` 设为同一个值，使边界确定。这也修掉了第七轮审核登记的 P1-5（「transportConfig 空实现 + 注释关于超时的说法不成立」）|
+| **TCK 偶发超时**（真实缺陷，未完全证实已消除） | 实测 `OpcUaAdapterTckTest.sessionMustBeUsableAfterBind` 偶发 `connection.timeout`（重跑通过）。根因与上一条同源。已接线超时，但**未做多次重复运行的稳定性证明** |
+
+**一条必须记住的观测纪律**：`mvn -pl ypbin-iot-protocol-opcua test`（**不带 `-am`**）会失败 4 项，
+而 `mvn -pl ... -am test` 与全量 `mvn clean test` 均通过。原因是前者会用 `~/.m2` 里**过期的
+reactor 内部制品**（core/runtime）去跑测试。**判定产品是否回归，必须用全量构建或带 `-am` 的命令**；
+不带 `-am` 的红是环境病理，但也不能因此就当成噪声忽略——它这条教训的另一面是
+「**同一模块，两个命令给出不同结论时，必须先解释清楚差异再下结论**」。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |

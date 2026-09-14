@@ -132,6 +132,26 @@ class OpcUaAdapterGuardTest {
     }
 
     @Test
+    @DisplayName("OPC-PROBE-CFG probe 必须带出**凭据/策略配置错误**的真实原因")
+    void probeMustSurfaceConfigurationErrors() {
+        // 非 None 策略但缺 keystore 属配置错误：probe 必须报出该原因，
+        // 而不是折叠成 MSG_CONNECTION_INACTIVE（那会把排查方向引向网络）。
+        OpcUaAdapter secured = new OpcUaAdapter(new OpcUaProperties(true,
+                "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256", "SignAndEncrypt",
+                Duration.ofSeconds(2), Duration.ofMillis(200), 100, 1, 100, null, null, null, null, null));
+        ConnectionSpec spec = new ConnectionSpec("probe-cfg", OpcUaAdapter.PROTOCOL_CODE,
+                Endpoint.of("opc.tcp://127.0.0.1:4840"), Duration.ofSeconds(2), Duration.ofSeconds(2),
+                null, null, Map.of());
+        var result = secured.probe(spec, context).toCompletableFuture()
+                .orTimeout(15, TimeUnit.SECONDS).join();
+        assertThat(result.reachable()).isFalse();
+        assertThat(result.failureReason())
+                .as("缺 keystore 属配置错误，必须原样带出")
+                .isNotBlank()
+                .isNotEqualTo(OpcUaAdapter.MSG_CONNECTION_INACTIVE);
+    }
+
+    @Test
     @DisplayName("OPC-03b 配置了用户名密码但策略为 None 必须 fail-fast（否则凭据明文外发）")
     void credentialsOverPlaintextMustFailFast() {
         // 用户名密码在 SecurityPolicy#None 下是明文传输的（Nonce 加密只在非 None 策略下生效）。

@@ -31,6 +31,7 @@ import cn.ypbin.iot.core.model.Endpoint;
 import cn.ypbin.iot.core.model.PingResult;
 import cn.ypbin.iot.core.model.PointAddress;
 import cn.ypbin.iot.core.model.PointWrite;
+import cn.ypbin.iot.core.model.ProbeResult;
 import cn.ypbin.iot.core.model.SessionState;
 import cn.ypbin.iot.core.model.SubscribeRequest;
 import cn.ypbin.iot.core.model.TlsOptions;
@@ -96,6 +97,23 @@ class MqttEdgeCaseTest {
         Throwable error = adapter.open(spec, context).toCompletableFuture()
                 .handle((connection, ex) -> ex).join();
         assertThat(error).isInstanceOf(ConnectionException.class);
+    }
+
+    @Test
+    @DisplayName("MQE-PROBE-CFG probe 必须带出**配置错误**的真实原因，而不是折叠成「链路不可用」")
+    void probeMustSurfaceConfigurationErrors() {
+        // 与 Modbus 的 MBE-PROBE-CFG 对应：配了未实现的 TLS 时必须报配置原因，
+        // 否则「测试连接」这个最常用的诊断入口会把排查方向引向网络。
+        ConnectionSpec tlsSpec = new ConnectionSpec("probe-tls", MqttAdapter.PROTOCOL_CODE,
+                Endpoint.of("tcp://127.0.0.1:" + broker.port()), Duration.ofSeconds(3),
+                Duration.ofSeconds(3), TlsOptions.enabledDefault(), null, Map.of());
+        ProbeResult result = adapter.probe(tlsSpec, context).toCompletableFuture()
+                .orTimeout(15, TimeUnit.SECONDS).join();
+        assertThat(result.reachable()).isFalse();
+        assertThat(result.failureReason())
+                .as("TLS 未实现属配置错误，必须原样带出，不得折叠成 MSG_CONNECTION_INACTIVE")
+                .isNotBlank()
+                .isNotEqualTo(MqttAdapter.MSG_CONNECTION_INACTIVE);
     }
 
     @Test
