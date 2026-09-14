@@ -103,4 +103,39 @@ class FramingSpecTest {
         }
         assertThat(FramingMode.fromCode(999)).isEmpty();
     }
+
+    @Test
+    @DisplayName("FRAME-07 长度字段规格的各合法长度都必须被接受，非法长度必须被拒")
+    void lengthFieldLengthsMustBeValidated() {
+        for (int length : new int[] {1, 2, 3, 4, 8}) {
+            FramingSpec spec = new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, length, 0, 0, null);
+            assertThat(spec.lengthFieldLength()).as("规范允许的长度字段长度必须被接受: %d", length)
+                    .isEqualTo(length);
+        }
+        for (int length : new int[] {0, 5, 6, 7, 9, -1}) {
+            assertThatThrownBy(() -> new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, length, 0, 0, null))
+                    .as("非法长度字段长度必须被拒: %d", length)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    @DisplayName("FRAME-08 非分隔符模式下 delimiter 为 null 也必须被接受（归一化为空数组）")
+    void nullDelimiterAllowedOutsideDelimiterMode() {
+        FramingSpec none = new FramingSpec(FramingMode.NONE, 1024, 0, 0, 0, 0, null);
+        assertThat(none.delimiter()).isEmpty();
+        FramingSpec lengthField = new FramingSpec(FramingMode.LENGTH_FIELD, 1024, 0, 2, 0, 0, null);
+        assertThat(lengthField.delimiter()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("FRAME-09 相等性对每种模式都必须按值比较")
+    void equalityAcrossModes() {
+        assertThat(FramingSpec.none()).isEqualTo(FramingSpec.none());
+        assertThat(FramingSpec.none()).isNotEqualTo(FramingSpec.lengthField1Byte(1024));
+        assertThat(FramingSpec.lengthField1Byte(1024)).isEqualTo(FramingSpec.lengthField1Byte(1024));
+        assertThat(FramingSpec.lengthField1Byte(1024)).isNotEqualTo(FramingSpec.lengthField1Byte(2048));
+        assertThat(FramingSpec.none().hashCode()).isEqualTo(FramingSpec.none().hashCode());
+        assertThat(FramingSpec.delimiter(new byte[] {'\n'}, 100).toString()).isNotBlank();
+    }
 }

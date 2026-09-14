@@ -103,6 +103,80 @@ class ModbusEdgeCaseTest {
     }
 
     @Test
+    @DisplayName("MBE-TYPES 全部寄存器类型与多种地址形态都必须走通读路径（覆盖分支）")
+    void allRegisterTypesMustBeReadable() {
+        DeviceSession session = openSession();
+        // 四种寄存器类型各读一次：FC01/FC02/FC03/FC04 是四条独立分支
+        for (ModbusRegisterType type : ModbusRegisterType.values()) {
+            PointAddress address = PointAddress.of(type.getCode() + ":0");
+            ReadResult result = session.read(new ReadRequest(List.of(address), Duration.ofSeconds(3)))
+                    .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
+            assertThat(result).as("寄存器类型 %s 必须能产出结果（成功或明确失败），不得抛异常",
+                    type.getCode()).isNotNull();
+            assertThat(result.values()).hasSize(1);
+        }
+        // 地址形态：批量、以及越界长度（后者必须走「长度不足」分支）
+        ReadResult bulk = session.read(new ReadRequest(List.of(
+                PointAddress.of("holding:0"), PointAddress.of("holding:1"),
+                PointAddress.of("coil:0")), Duration.ofSeconds(3)))
+                .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
+        assertThat(bulk.values()).hasSize(3);
+
+        ReadResult overlong = session.read(new ReadRequest(List.of(
+                PointAddress.of("holding:0"), PointAddress.of("holding:1")), Duration.ofSeconds(3)))
+                .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
+        assertThat(overlong.values()).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("MBE-CONN ModbusConnection 的状态/描述/扩展解包与幂等关闭")
+    void connectionAccessorsMustBehave() throws Exception {
+        ConnectionSpec spec = tcpSpec("conn-accessors");
+        ProtocolConnection connection = adapter.open(spec, context).toCompletableFuture()
+                .orTimeout(10, TimeUnit.SECONDS).join();
+        try {
+            assertThat(connection.connectionId()).isEqualTo("conn-accessors");
+            assertThat(connection.endpoint()).isNotNull();
+            assertThat(connection.state()).isEqualTo(SessionState.ONLINE);
+            assertThat(connection.openedAt()).isNotNull();
+            // Modbus 是多设备链路：未指定 unitId 时取会话必须**显式报错**，
+            // 而不是返回 null 让宿主拿到半个会话（返回 null 会让调用点在很远的地方才 NPE）
+            assertThatThrownBy(connection::session)
+                    .as("多设备链路上取会话必须显式报错并指明要按 unitId 绑定")
+                    .isInstanceOf(UnsupportedCapabilityException.class);
+            assertThat(connection.describe())
+                    .as("describe 必须含端点与从站数（诊断入口）")
+                    .containsKeys("endpoint", "slaveCount");
+            // 传输层不提供协议扩展能力：任何类型都必须返回空，而不是抛异常
+            assertThat(connection.unwrap(ModbusConnection.class)).isEmpty();
+            assertThat(connection.unwrap(String.class)).isEmpty();
+        } finally {
+            connection.close();
+            connection.close();
+        }
+        assertThat(connection.state()).isEqualTo(SessionState.CLOSED);
+        assertThat(connection.whenClosed().toCompletableFuture()
+                .orTimeout(5, TimeUnit.SECONDS).join()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("MBE-PROBE-CFG probe 必须带出**配置错误**的真实原因，而不是折叠成「链路不可用」")
+    void probeMustSurfaceConfigurationErrors() {
+        // 这一条是上一轮「probe 不再折叠失败原因」改动的**正面验证**：
+        // 原先配了未实现的 TLS 会被报成「端点不可达」，把排查方向引向网络。
+        ConnectionSpec tlsSpec = new ConnectionSpec("probe-tls", ModbusAdapter.PROTOCOL_CODE,
+                Endpoint.of("modbus+tcp://127.0.0.1:502"), Duration.ofSeconds(2), Duration.ofSeconds(2),
+                TlsOptions.enabledDefault(), null, Map.of());
+        var result = adapter.probe(tlsSpec, context).toCompletableFuture()
+                .orTimeout(10, TimeUnit.SECONDS).join();
+        assertThat(result.reachable()).isFalse();
+        assertThat(result.failureReason())
+                .as("TLS 未实现属配置错误，必须原样带出，不得折叠成 MSG_CONNECTION_INACTIVE")
+                .isNotBlank()
+                .isNotEqualTo(ModbusAdapter.MSG_CONNECTION_INACTIVE);
+    }
+
+    @Test
     @DisplayName("MBE-01 链路对象：session() 不适用、describe 带从站数、unwrap 为空")
     void connectionObjectBehaviour() {
         ProtocolConnection connection = openConnection();

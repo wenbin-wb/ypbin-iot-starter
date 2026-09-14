@@ -1452,6 +1452,30 @@ keytool -genkeypair -alias client -keyalg RSA -keysize 2048 -validity 365 \
 > 这也再次印证第七轮审核的提醒：**信任目录里放 CA 会让该 CA 签发的任意主体证书通过校验**——
 > 放叶子是精确 pin，放 CA 是信任整个 CA，两者安全含义完全不同，部署时必须明确选择。
 
+**收尾：probe 配置错误用例 + 两模块分支余量拉开 + MetricsRecorder 契约（2026-09-14）**
+
+| 项 | 内容 |
+|---|---|
+| probe 配置错误用例 | `MBE-PROBE-CFG`：配未实现的 TLS 时，`failureReason` 必须**不是** `MSG_CONNECTION_INACTIVE` —— 这是上一轮「probe 不再折叠原因」改动的正面验证（此前 5 处 probe 调用没有一处探测配置错误） |
+| 分支余量 | modbus **64.9% → 70.7%**（+6.7%）、transport **64.2% → 68.9%**（+4.9%）|
+| MetricsRecorder 契约 | `docs/SPI.md` 写明：**本接口在协议线程上被同步调用，实现必须非阻塞**；严禁网络/磁盘/取锁，需异步则在实现内部投递到有界队列 |
+
+**当前分支余量（相对 0.64 下限）**：mqtt +20.3 / tcp +14.9 / **modbus +6.7** / runtime +5.6 / **transport +4.9** / opcua +3.3 / starter +3.3 / core +2.4。
+
+**OPC UA 加密端到端仍未完成**（这是本轮唯一未竟项，缺口已精确登记）：
+保险库/信任/身份装配与**校验逻辑**都已验证（`SEC-08` 证明受信通过、未受信被拒；
+`SEC-09` 证明 trust-all 放行），但**没有真正与一台 SignAndEncrypt 服务端完成握手**。
+所需的 harness 改造已经查清：
+
+- 服务端端点：`EndpointConfig.Builder.setCertificate(serverCert).setSecurityPolicy(Basic256Sha256)
+  .setSecurityMode(SignAndEncrypt).addTokenPolicy(用户名令牌)`
+- **但服务端签名/解密还需要私钥**：`EndpointConfig` 只收证书，私钥必须经
+  `OpcUaServerConfigBuilder.setCertificateManager(CertificateManager)` 提供，
+  而 stack-core **没有现成的 `CertificateGroup` 实现**（`CertificateGroup` 有 7 个方法，
+  含 `getCertificateGroupId()`/`getSupportedCertificateTypeIds()`），需在测试侧自写一个
+  持有单个 keypair+证书、信任列表含客户端证书的实现。
+- 服务端还需 `addTokenPolicy(UserTokenPolicy)` 才能验证用户名密码令牌。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |
