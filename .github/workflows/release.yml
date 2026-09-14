@@ -7,6 +7,10 @@ on:
       version:
         description: '发布版本（须与根 pom 的 <revision> 一致，例如 0.1.0）'
         required: true
+      dry-run:
+        description: '仅做前置校验与打包（不签名、不上传）'
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -27,6 +31,11 @@ jobs:
             echo "::error::根 pom 的 <revision> ($REVISION) 与发布版本 (${{ inputs.version }}) 不一致"
             exit 1
           fi
+          case "$REVISION" in
+            *-SNAPSHOT)
+              echo "::error::发布版本不能是 SNAPSHOT（$REVISION）：先把 <revision> 改成正式版本号"
+              exit 1 ;;
+          esac
 
       - name: 校验目标 tag 尚不存在
         run: |
@@ -36,6 +45,56 @@ jobs:
             exit 1
           fi
 
-  # 真正的发布步骤（GPG 签名 + central-publishing）尚未接入本仓：
-  # 见 RELEASING.md「一、发布前置」。在接入之前，本工作流**刻意只做前置校验**，
-  # 不执行任何上传 —— 一个会静默跳过上传的「发布」工作流比没有更危险。
+      - name: 配置 JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # 关键断言：-Prelease 必须把非发布模块（architecture-tests）排除出反应堆。
+      # 这一条是发布工程的核心不变量：maven.deploy.skip 对 central-publishing 无效，
+      # 只能靠 profile 把它移出反应堆（ModulePublishingTest 在常规 CI 里守着同一个不变量）。
+      - name: 校验发布反应堆不含非发布模块
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -Prelease -DskipTests validate > reactor.log 2>&1
+          if grep -q "ypbin-iot-architecture-tests" reactor.log; then
+            echo "::error::-Prelease 反应堆里出现了 ypbin-iot-architecture-tests —— dev-only profile 未生效"
+            exit 1
+          fi
+          echo "-Prelease 反应堆校验通过：非发布模块已排除"
+
+  release:
+    needs: guard
+    if: ${{ inputs.dry-run == false }}
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: 发布到 Maven Central
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -ntp -Prelease -DskipTests deploy
+
+      - name: 打 tag
+        run: |
+          set -euo pipefail
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"

@@ -142,6 +142,54 @@
             </modules>
         </profile>
 
+        <!--
+          发布 profile（与母仓同一套做法）。
+
+          为什么根 pom 要独立声明发布插件：根聚合 pom 的 parent 是
+          ypbin-starter-dependencies，而 central-publishing 配置在母仓的**根 pom** 里，
+          不在已发布的父 pom 中 —— 因此这里必须自己声明一份。
+
+          子模块由 dev-only（activeByDefault）承载；-Prelease 会让它失效，
+          架构测试模块自动离开发布反应堆（这正是我们要的）。
+          excludeArtifacts 仍显式排除它：该插件 extensions=true 接管 deploy 生命周期，
+          **不读取 maven.deploy.skip**，只按 artifactId 比对（写 groupId:artifactId 不匹配）。
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.8.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>uploaded</waitUntil>
+                            <excludeArtifacts>
+                                <artifact>ypbin-iot-architecture-tests</artifact>
+                            </excludeArtifacts>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.4</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <!-- 供应链合规：生成 CycloneDX SBOM。显式带回架构测试模块，保证 SBOM 覆盖完整。 -->
         <profile>
             <id>sbom</id>

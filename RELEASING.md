@@ -3,15 +3,18 @@
 > **当前状态：`0.1.0-SNAPSHOT` 从未发布。** 本文件是**待执行**的发布流程，
 > 其中的发布配置（central-publishing / GPG）**尚未接入本仓**——见下方「一、发布前置（未完成）」。
 
-## 一、发布前置（未完成，发布前必须补齐）
+## 一、发布前置
 
 | 项 | 状态 | 说明 |
 |---|---|---|
 | `LICENSE` | ✅ | Apache 2.0 |
-| GPG 签名配置 | ❌ | 母仓通过 profile 提供；本仓尚未接入 |
-| `central-publishing-maven-plugin` | ❌ | 同上 |
-| 非发布模块隔离 | ✅ | `ypbin-iot-architecture-tests` 由 `dev-only` profile 承载，`-Prelease` 会排除 |
-| 发布后推进开发版本 | 见第四节 | |
+| 非发布模块隔离 | ✅ | `ypbin-iot-architecture-tests` 由 `dev-only` profile 承载；**已实测**：`-Prelease` 的反应堆为 12 个模块、不含它。该不变量由 `ModulePublishingTest` 与 `release.yml` 双重守着 |
+| GPG 签名 + `central-publishing-maven-plugin` | ✅ 已配置 | 在根 pom 的 `release` profile（母仓的发布配置在其**根 pom**，不在已发布的父 pom，故本仓需独立声明）|
+| Central 凭据与 GPG 私钥 | ⬜ **需配置** | GitHub 仓库 secrets：`MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` / `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE`；并创建 `release` environment |
+| 首个正式版本 | ⬜ | `<revision>` 目前是 `0.1.0-SNAPSHOT`；发布前先改为 `0.1.0` |
+
+> 发布工作流默认是 `dry-run`（只做前置校验与打包，不签名不上传）——
+> 在凭据配置完成前，**不会**出现「看起来发布了其实什么都没上传」的情况。
 
 ## 二、每次发布
 
@@ -19,7 +22,8 @@
    （`dev-only` 是 `activeByDefault` profile，显式激活任一 profile 都会让它失效）。
 2. 更新 `CHANGELOG.md`：把 `[未发布]` 改为目标版本号并补日期。
 3. 根 pom 的 `<revision>` 改为目标版本（`0.1.0`），提交并打 tag（`v0.1.0`）。
-4. 执行发布构建（**接入发布插件后**）。
+4. 触发 `Release` 工作流（先 `dry-run=true` 校验，再 `dry-run=false` 正式发布），
+   或在本地执行 `mvn -Prelease -DskipTests deploy`（需本机配好 GPG 与 `~/.m2/settings.xml` 的 `central` 服务端凭据）。
 5. **立刻**把 `<revision>` 推回下一个开发版本（`0.2.0-SNAPSHOT`）并提交。
 
 > 第 5 步不是可选项。母仓出过一次真实事故：**漏了这一步**导致 master 在已发布坐标下继续累积改动，
