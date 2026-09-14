@@ -17,6 +17,29 @@
 
 ---
 
+
+## 工程治理与质量门禁
+
+| 门禁 | 内容 | 本地命令 |
+|---|---|---|
+| 架构约束（ArchUnit） | 分层依赖、规则有效性自检、模块发布边界 | `mvn -pl ypbin-iot-architecture-tests -am test` |
+| 源码规范 | 禁内联 FQCN、类署名、集合字面量、消息键 | 同上（`SourceConventionTest`） |
+| 覆盖率 | 指令 ≥ 0.80、**分支 ≥ 0.64**（防倒退下限，非目标） | `mvn -pl <模块> -am test` |
+| 代码风格 | spotless（Apache 头、导入顺序、去尾空格） | `mvn spotless:apply` |
+| 模块发布边界 | 非发布模块必须由 `dev-only` profile 承载 | 含在架构约束测试中 |
+
+> 门禁一律经过**反向验证**（注入违规必须红、撤掉必须绿）。本仓已因此发现并修掉两类问题：
+> 一个放在 `pluginManagement` 里**永不生效**的覆盖率门禁，以及一套**被上游短路成死代码**的安全实现。
+
+**未接入（见 `ROADMAP.md`）**：CI 工作流已就位，但依赖版本收敛、NullAway、配置元数据漂移三类门禁
+尚未接入——它们**没有**用 `|| true` 之类做成永不失败的假门禁，而是如实登记为待办。
+
+## 文档
+
+- `docs/DESIGN.md` 总体设计 · `docs/SPI.md` 契约 · `docs/RUNTIME.md` 运行时 · `docs/PROTOCOLS.md` 协议与审查记录
+- `CONTRACT.md` 兼容性承诺 · `CHANGELOG.md` 更新日志 · `ROADMAP.md` 路线图
+- `CONTRIBUTING.md` 贡献指南 · `RELEASING.md` 发布指南
+
 ## 这是什么
 
 一套**只做协议对接**的物联网接入框架：把 OPC UA、Modbus、S7、BACnet、MQTT、GB28181 等

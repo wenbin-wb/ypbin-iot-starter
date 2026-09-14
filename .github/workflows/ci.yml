@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # 不带任何 -P：dev-only 是 activeByDefault profile，显式激活任一 profile 都会让它失效，
+      # 架构约束门禁（含 ModulePublishingTest）就不会跑。这是本步骤唯一正确的调用方式。
+      - name: 全量构建与单元测试（含架构约束与覆盖率门禁）
+        run: mvn -B -ntp clean test
+
+      - name: 生成 CycloneDX SBOM（软件物料清单）
+        run: mvn -B -ntp -Psbom verify -DskipTests
+
+      - name: 归档 SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: '**/target/bom.json'
+          if-no-files-found: warn
+
+      # 未接入的门禁（如实登记，不用 || true 之类做成永不失败的假门禁）：
+      #   - 依赖版本收敛（enforcer dependencyConvergence）：见 ROADMAP "M1.x"
+      #   - NullAway 空值语义：见 ROADMAP "M1.x"
+      #   - 配置元数据漂移：见 ROADMAP "M1.x"
+      - name: 归档 JaCoCo 覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports
+          path: '**/target/site/jacoco/'
+          if-no-files-found: warn

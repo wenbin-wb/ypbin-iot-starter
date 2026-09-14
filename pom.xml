@@ -52,7 +52,7 @@
         <module>ypbin-iot-protocol-mqtt</module>
         <module>ypbin-iot-protocol-opcua</module>
         <module>ypbin-iot-test</module>
-        <module>ypbin-iot-architecture-tests</module>
+        <!-- 非发布模块（architecture-tests）不在此处：见 dev-only profile -->
     </modules>
 
     <properties>
@@ -114,4 +114,60 @@
             </plugins>
         </pluginManagement>
     </build>
+    <profiles>
+        <!--
+          非发布模块隔离 profile（activeByDefault）。
+
+          为什么必须这样做：`maven.deploy.skip=true` 对 central-publishing-maven-plugin
+          （extensions=true 接管 deploy 生命周期）**无效**，未签名的架构测试产物会混进
+          Central 上传包并导致整个 deployment 校验失败（母仓 3.0.0 首发即如此）。
+          把它放进 activeByDefault profile，`-Prelease` 会自动排除。
+
+          ⚠️ 副作用（与母仓一致）：只要显式激活任一 profile（如 `-Psbom`），本 profile 即失效，
+          架构门禁就不会跑。故 `sbom` profile 里补一份带回它；发布前的完整门禁由
+          CI 常规 job（`mvn clean test`，无 `-P`）保证。
+          新增不发布模块时必须同时加进本 profile 与 sbom profile，
+          由 ModulePublishingTest 强制校验。
+        -->
+        <profile>
+            <id>dev-only</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <module>ypbin-iot-architecture-tests</module>
+            </modules>
+        </profile>
+
+        <!-- 供应链合规：生成 CycloneDX SBOM。显式带回架构测试模块，保证 SBOM 覆盖完整。 -->
+        <profile>
+            <id>sbom</id>
+            <modules>
+                <module>ypbin-iot-architecture-tests</module>
+            </modules>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.cyclonedx</groupId>
+                        <artifactId>cyclonedx-maven-plugin</artifactId>
+                        <version>2.9.3</version>
+                        <executions>
+                            <execution>
+                                <id>make-bom</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>makeAggregateBom</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <projectType>library</projectType>
+                            <outputFormat>json</outputFormat>
+                            <outputName>bom</outputName>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -1,0 +1,41 @@
+name: Release
+
+# 手动触发：发布是显式动作，不做 push 自动发布。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本（须与根 pom 的 <revision> 一致，例如 0.1.0）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 校验 pom revision 与输入版本一致
+        run: |
+          set -euo pipefail
+          REVISION="$(grep -oP '(?<=<revision>)[^<]+' pom.xml | head -1)"
+          echo "pom revision = $REVISION, input = ${{ inputs.version }}"
+          if [ "$REVISION" != "${{ inputs.version }}" ]; then
+            echo "::error::根 pom 的 <revision> ($REVISION) 与发布版本 (${{ inputs.version }}) 不一致"
+            exit 1
+          fi
+
+      - name: 校验目标 tag 尚不存在
+        run: |
+          set -euo pipefail
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::tag v${{ inputs.version }} 已存在 —— 坐标会被冒用（母仓出过同名不同内容的事故）"
+            exit 1
+          fi
+
+  # 真正的发布步骤（GPG 签名 + central-publishing）尚未接入本仓：
+  # 见 RELEASING.md「一、发布前置」。在接入之前，本工作流**刻意只做前置校验**，
+  # 不执行任何上传 —— 一个会静默跳过上传的「发布」工作流比没有更危险。

@@ -13,6 +13,14 @@
 
     <artifactId>ypbin-iot-architecture-tests</artifactId>
 
+    <properties>
+        <!-- 架构约束测试不发布：它只在构建期做门禁，没有任何运行期价值。
+             与根 pom 的 dev-only profile 配合，避免未签名产物混进上传包
+             （母仓 3.0.0 首次发布就因这个栽过：maven.deploy.skip 对
+             central-publishing-maven-plugin 无效，必须先离开发布反应堆）。 -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <name>${project.artifactId}</name>
     <description>架构约束测试（不发布）：分层、零 Spring、装配规则与规则有效性自检</description>
 

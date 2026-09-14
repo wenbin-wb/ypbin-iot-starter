@@ -1,0 +1,6 @@
+name: ypbin-iot CodeQL 配置
+
+# 只扫描源码：排除构建产物与测试夹具，避免把生成物/夹具混进安全面板
+paths-ignore:
+  - '**/target/**'
+  - '**/*.md'
