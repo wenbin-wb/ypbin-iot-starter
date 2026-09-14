@@ -1185,6 +1185,31 @@ M0 不是「搭个空壳」，而是**把"能跑"这件事变成可验证事实*
 | MQTT 客户端标识不唯一 → broker 互踢 | MQTT 专项测试 |
 | 协议码在两处维护（`modbus-tcp` vs `modbus`）漂移 | 地址解析测试 |
 
+**OPC UA（Milo）API 调研结论（2026-09-13 实测，供下轮直接落地，避免重复调研）**
+
+坐标确认（**注意与旧文档不同**）：`org.eclipse.milo:milo-sdk-client:1.1.7`（不是 `sdk-client`，
+后者冻结在 0.6.x）；服务端模拟器为 `org.eclipse.milo:milo-sdk-server:1.1.7`。
+
+已验证可用的关键签名（`javap` 实测，非文档推测）：
+
+| 用途 | 签名 |
+|---|---|
+| 建客户端 | `OpcUaClient.create(String endpointUrl, Function<List<EndpointDescription>, Optional<EndpointDescription>>, Consumer<OpcTcpClientTransportConfigBuilder>, Consumer<OpcUaClientConfigBuilder>)` |
+| 连接 | `CompletableFuture<OpcUaClient> connectAsync()` / `disconnectAsync()` |
+| 批量读 | `CompletableFuture<List<DataValue>> readValuesAsync(double maxAge, TimestampsToReturn, List<NodeId>)` |
+| 批量写 | `CompletableFuture<List<StatusCode>> writeValuesAsync(List<NodeId>, List<DataValue>)` |
+| 浏览 | `CompletableFuture<List<ReferenceDescription>> browseAsync(NodeId[, AddressSpace.BrowseOptions])`、`browseNodesAsync(...)` 返回 `UaNode` |
+| 订阅 | `new OpcUaSubscription(client[, double publishingInterval])` → `createAsync()` → `addMonitoredItem(...)` → `createMonitoredItems()`（返回逐项结果）；`deleteAsync()` 释放 |
+
+**待落地时的注意点**：
+- `OpcUaMonitoredItem` 的构造签名需再确认（本轮未实测），订阅部分是 OPC UA 模块的主要不确定点。
+- `AddressSpace.getBrowseOptions()` / `modifyBrowseOptions(...)` 是 **`synchronized` 方法**（Milo 自身实现），
+  调用它们不违反本仓「禁 synchronized」约定（约束的是我们自己的代码），但**不要在虚拟线程上调用**。
+- 读取用 `readValuesAsync` 批量接口：OPC UA 的 `Read` 服务天然支持一次请求多个 NodeId，
+  不应逐点位调用（这正是协议相对 Modbus 的优势），部分失败由每个 `DataValue.statusCode` 表达。
+- `BrowseExtension` 是本仓**唯一尚未被任何协议实现的扩展点**；OPC UA 的 `browse` 是其天然落点，
+  落地时应同时验证「扩展点从 `ProtocolConnection.unwrap` 取出」这条链路。
+
 **M1 的取舍与实测结论**：
 - **MQTT 基线定在 3.1.1 而非 5.0**：测试过程中发现 Moquette 只支持 3.1.1，
   进而复核了工业现场的实际分布——绝大多数 broker 与设备只支持 3.1.1，5.0 专属能力在现场几乎用不上。
