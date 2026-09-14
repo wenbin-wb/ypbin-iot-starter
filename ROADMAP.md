@@ -23,18 +23,18 @@
 - ✅ 非发布模块隔离（`dev-only` profile）+ `ModulePublishingTest` 门禁
 - ✅ `LICENSE` / `CHANGELOG` / `CONTRACT` / `CONTRIBUTING` / `RELEASING` / `ROADMAP`
 - ✅ CI（`ci.yml` / `codeql.yml` / `release.yml`，对齐母仓）
-- 🚧 NullAway（`-Pnullaway` + `@NullMarked`）覆盖全部模块
+- ✅ NullAway（`-Pnullaway` + `@NullMarked`）覆盖全部 8 个模块（0 违规，含执行自检）
   - ✅ 父版本升到 `3.1.0-SNAPSHOT`（`nullaway` / `dep-convergence` profile 定义在父 pom，
     2.2.3 没有它们；母仓发布 3.1.0 正式版后应改钉正式版）
-  - ✅ `ypbin-iot-core`（修掉 40 处真实契约不符：record 组件该标 `@Nullable` 的没标、
-    异常构造器参数、`ProtocolDescriptor.Builder` 未校验必填项）
-  - ⬜ runtime / transport / spring-boot-starter / protocol-* 待推广
+  - ✅ 全 8 模块完成（core 40 / starter 10 / runtime 8 / tcp 8 / opcua 8 / transport 4 /
+    modbus 2 / mqtt 2 处，全部按语义修，无一处 `@SuppressWarnings` 压制）
+  - ✅ 依赖版本收敛（`-Pdep-convergence`，随父版本一并获得）
 - ⬜ ArchUnit 补齐母仓有而本仓缺的门禁
   - ✅ 模块发布边界（`ModulePublishingTest`，已反向验证）
   - ✅ 配置元数据（`ConfigMetadataTest`，已反向验证）
   - ✅ 注册发现：**已有**（`IotAutoConfigurationTest.CFG-08` 已做 SpringFactoriesLoader 发现，不重复建设）
   - ✅ 编码规则（printStackTrace/System.out/字段注入/Collections）：**已有**（`ARCH-05`）
-- ⬜ `tools/` 工具链（配置元数据导出与漂移门禁、`preflight.sh`）—— 元数据**校验**已由 `ConfigMetadataTest` 覆盖，缺的是导出脚本
+- ✅ `tools/`：`check-nullaway.sh`（含执行自检）+ `preflight.sh`（发布前总检）；缺跨模块元数据**导出**脚本
 - ⬜ 发布前置：GPG + `central-publishing-maven-plugin` 接入
 
 ## M2 · 协议扩容（⬜）

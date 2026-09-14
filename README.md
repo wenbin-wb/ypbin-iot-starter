@@ -22,17 +22,22 @@
 
 | 门禁 | 内容 | 本地命令 |
 |---|---|---|
-| 架构约束（ArchUnit） | 分层依赖、规则有效性自检、模块发布边界 | `mvn -pl ypbin-iot-architecture-tests -am test` |
-| 源码规范 | 禁内联 FQCN、类署名、集合字面量、消息键 | 同上（`SourceConventionTest`） |
+| 架构约束（ArchUnit） | 分层依赖、编码铁律、规则有效性自检 | `mvn -pl ypbin-iot-architecture-tests -am test` |
+| 源码规范 | 禁内联 FQCN、`@Bean` 覆盖语义、autoconfig 注册、禁 `ordinal()` | 同上（`SourceConventionTest`） |
+| 模块发布边界 | 非发布模块必须由 `dev-only` profile 承载 | 同上（`ModulePublishingTest`） |
+| 配置元数据 | 每个 `@ConfigurationProperties` 前缀都必须有元数据 | 同上（`ConfigMetadataTest`） |
 | 覆盖率 | 指令 ≥ 0.80、**分支 ≥ 0.64**（防倒退下限，非目标） | `mvn -pl <模块> -am test` |
+| 空值语义（NullAway） | 8 个模块参与；**含「门禁是否真的执行过」自检** | `tools/check-nullaway.sh` |
+| 依赖版本收敛 | enforcer `dependencyConvergence` | `mvn -Pdep-convergence validate` |
+| 供应链 | CycloneDX SBOM | `mvn -Psbom verify -DskipTests` |
 | 代码风格 | spotless（Apache 头、导入顺序、去尾空格） | `mvn spotless:apply` |
-| 模块发布边界 | 非发布模块必须由 `dev-only` profile 承载 | 含在架构约束测试中 |
+| 发布前总检 | 按正确顺序把上述门禁各跑一遍（`-P` 会关掉架构门禁，不能合并） | `tools/preflight.sh` |
 
 > 门禁一律经过**反向验证**（注入违规必须红、撤掉必须绿）。本仓已因此发现并修掉两类问题：
 > 一个放在 `pluginManagement` 里**永不生效**的覆盖率门禁，以及一套**被上游短路成死代码**的安全实现。
 
-**未接入（见 `ROADMAP.md`）**：CI 工作流已就位，但依赖版本收敛、NullAway、配置元数据漂移三类门禁
-尚未接入——它们**没有**用 `|| true` 之类做成永不失败的假门禁，而是如实登记为待办。
+**未接入（见 `ROADMAP.md`）**：GPG 签名与 `central-publishing`（发布前必须补齐）；
+配置元数据的**跨模块聚合导出脚本**（单模块元数据校验已由 `ConfigMetadataTest` 覆盖）。
 
 ## 文档
 

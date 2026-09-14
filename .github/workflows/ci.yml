@@ -28,6 +28,13 @@ jobs:
       - name: 全量构建与单元测试（含架构约束与覆盖率门禁）
         run: mvn -B -ntp clean test
 
+      # 自带「门禁是否真的执行过」自检：出现 Nothing to compile 或某模块没有编译记录即失败。
+      - name: 空值语义门禁（NullAway）
+        run: tools/check-nullaway.sh
+
+      - name: 依赖版本收敛
+        run: mvn -B -ntp -Pdep-convergence validate
+
       - name: 生成 CycloneDX SBOM（软件物料清单）
         run: mvn -B -ntp -Psbom verify -DskipTests
 
@@ -38,10 +45,6 @@ jobs:
           path: '**/target/bom.json'
           if-no-files-found: warn
 
-      # 未接入的门禁（如实登记，不用 || true 之类做成永不失败的假门禁）：
-      #   - 依赖版本收敛（enforcer dependencyConvergence）：见 ROADMAP "M1.x"
-      #   - NullAway 空值语义：见 ROADMAP "M1.x"
-      #   - 配置元数据漂移：见 ROADMAP "M1.x"
       - name: 归档 JaCoCo 覆盖率报告
         if: always()
         uses: actions/upload-artifact@v4
