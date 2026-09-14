@@ -84,6 +84,9 @@ public final class OpcUaAdapter implements ProtocolAdapter {
     /** 节点状态码非 Good 的消息键。 */
     public static final String MSG_STATUS_BAD = "iot.opcua.status.bad";
 
+    /** 凭据需要安全策略的消息键。 */
+    public static final String MSG_CREDENTIALS_NEED_SECURITY = "iot.opcua.credentials.need-security";
+
     /** 读失败的消息键。 */
     public static final String MSG_READ_FAILED = "iot.opcua.read.failed";
 
@@ -140,7 +143,7 @@ public final class OpcUaAdapter implements ProtocolAdapter {
      */
     public OpcUaAdapter(OpcUaProperties properties) {
         this.properties = properties == null ? new OpcUaProperties(null, null, null, null, null, null,
-                null, null) : properties;
+                null, null, null, null) : properties;
     }
 
     @Override
@@ -167,6 +170,13 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             // 与 Modbus / MQTT 同一口径：未实现的加密能力必须 fail-fast，绝不静默降级为明文
             return Stages.failed(new ConnectionException(spec.connectionId(), IotMessageKeys.CONFIG_INVALID,
                     "transport TLS not implemented; configure OPC UA security policy instead"));
+        }
+        if (properties.hasCredentials() && properties.isPlaintext()) {
+            // 用户名密码在 SecurityPolicy#None 下是**明文**传输的（Nonce 加密只在非 None 策略下生效）。
+            // 而本模块尚未实现任何非 None 策略 —— 唯一负责任的行为是拒绝，
+            // 而不是把凭据明晃晃地发出去、同时让宿主以为"认证过了"。
+            return Stages.failed(new ConnectionException(spec.connectionId(), MSG_CREDENTIALS_NEED_SECURITY,
+                    properties.username()));
         }
         if (!properties.isPlaintext()) {
             // 非 None 策略在 M1 未实现：接受它会让用户以为在签名/加密，实际仍是明文会话

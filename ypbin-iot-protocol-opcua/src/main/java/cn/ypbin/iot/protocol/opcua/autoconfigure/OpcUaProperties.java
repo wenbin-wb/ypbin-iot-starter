@@ -29,6 +29,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param maxNodesPerRead    单次 Read 服务最多携带的 NodeId 数（服务端 OperationLimits 可约束）
  * @param browseMaxDepth     浏览最大深度
  * @param browseMaxNodes     浏览最大节点数（防止在大型地址空间上失控）
+ * @param username           用户名；配置后表示使用用户名密码认证
+ * @param credentialRef      凭据引用（从 {@code CredentialResolver} 取密码，避免明文写进配置文件）
  * @author wenbin
  * @since 2026-09-14
  */
@@ -41,7 +43,9 @@ public record OpcUaProperties(
         Duration publishingInterval,
         Integer maxNodesPerRead,
         Integer browseMaxDepth,
-        Integer browseMaxNodes) {
+        Integer browseMaxNodes,
+        String username,
+        String credentialRef) {
 
     /** 配置前缀。 */
     public static final String PREFIX = "ypbin.iot.protocol.opcua";
@@ -86,5 +90,14 @@ public record OpcUaProperties(
      */
     public boolean isPlaintext() {
         return POLICY_NONE.equals(securityPolicy) && MODE_NONE.equalsIgnoreCase(securityMode);
+    }
+
+    /**
+     * 是否配置了用户名密码认证。
+     *
+     * @return 配置了用户名返回 {@code true}
+     */
+    public boolean hasCredentials() {
+        return username != null && !username.isBlank();
     }
 }

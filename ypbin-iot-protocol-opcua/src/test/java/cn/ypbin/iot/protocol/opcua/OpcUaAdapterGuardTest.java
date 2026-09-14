@@ -105,9 +105,7 @@ class OpcUaAdapterGuardTest {
     @Test
     @DisplayName("OPC-03 未实现的非 None 安全策略必须 fail-fast（安全静默降级是最高危的一类）")
     void unsupportedSecurityPolicyMustFailFast() {
-        OpcUaAdapter secured = new OpcUaAdapter(new OpcUaProperties(true,
-                "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256", "SIGN_AND_ENCRYPT",
-                Duration.ofSeconds(2), Duration.ofMillis(200), 100, 1, 100));
+        OpcUaAdapter secured = new OpcUaAdapter(new OpcUaProperties(true, "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256", "SIGN_AND_ENCRYPT", Duration.ofSeconds(2), Duration.ofMillis(200), 100, 1, 100, null, null));
         ConnectionSpec spec = new ConnectionSpec("secured", OpcUaAdapter.PROTOCOL_CODE,
                 Endpoint.of("opc.tcp://127.0.0.1:4840"), Duration.ofSeconds(2), Duration.ofSeconds(2),
                 null, null, Map.of());
@@ -121,6 +119,29 @@ class OpcUaAdapterGuardTest {
                 .orTimeout(5, TimeUnit.SECONDS).join();
         assertThat(error)
                 .as("接受未实现的安全策略会让用户以为在签名/加密，实际是明文会话")
+                .isInstanceOf(ConnectionException.class);
+    }
+
+    @Test
+    @DisplayName("OPC-03b 配置了用户名密码但策略为 None 必须 fail-fast（否则凭据明文外发）")
+    void credentialsOverPlaintextMustFailFast() {
+        // 用户名密码在 SecurityPolicy#None 下是明文传输的（Nonce 加密只在非 None 策略下生效）。
+        // 静默发出去会让宿主以为"认证过了"，因此必须拒绝。
+        OpcUaAdapter withCredentials = new OpcUaAdapter(new OpcUaProperties(true, null, null, null, null,
+                null, null, null, "operator", "opcua-password"));
+        ConnectionSpec spec = new ConnectionSpec("cred", OpcUaAdapter.PROTOCOL_CODE,
+                Endpoint.of("opc.tcp://127.0.0.1:4840"), Duration.ofSeconds(2), Duration.ofSeconds(2),
+                null, null, Map.of());
+        Throwable error = withCredentials.open(spec, context).toCompletableFuture()
+                .handle((connection, ex) -> {
+                    if (connection != null) {
+                        connection.close();
+                    }
+                    return ex;
+                })
+                .orTimeout(5, TimeUnit.SECONDS).join();
+        assertThat(error)
+                .as("明文策略下的凭据必须被拒绝，而不是明文发送")
                 .isInstanceOf(ConnectionException.class);
     }
 
@@ -162,18 +183,18 @@ class OpcUaAdapterGuardTest {
     @Test
     @DisplayName("OPC-06 配置默认值必须开箱即用且边界归一化")
     void propertiesMustNormalizeDefaults() {
-        OpcUaProperties defaults = new OpcUaProperties(null, null, null, null, null, null, null, null);
+        OpcUaProperties defaults = new OpcUaProperties(null, null, null, null, null, null, null, null, null, null);
         assertThat(defaults.isEnabled()).isTrue();
         assertThat(defaults.isPlaintext()).as("默认必须是明文策略（现场大量旧设备只支持明文）").isTrue();
         assertThat(defaults.requestTimeout()).isEqualTo(Duration.ofSeconds(10));
         assertThat(defaults.maxNodesPerRead()).isEqualTo(OpcUaProperties.DEFAULT_MAX_NODES_PER_READ);
         assertThat(defaults.browseMaxDepth()).isEqualTo(1);
 
-        assertThat(new OpcUaProperties(true, null, null, null, null, 0, -1, 0).maxNodesPerRead())
+        assertThat(new OpcUaProperties(true, null, null, null, null, 0, -1, 0, null, null).maxNodesPerRead())
                 .as("非正数必须回落到默认值而不是带病运行")
                 .isEqualTo(OpcUaProperties.DEFAULT_MAX_NODES_PER_READ);
-        assertThat(new OpcUaProperties(true, "  ", "  ", null, null, null, null, null).isPlaintext()).isTrue();
-        assertThat(new OpcUaProperties(true, "http://x", "SIGN", null, null, null, null, null)
+        assertThat(new OpcUaProperties(true, "  ", "  ", null, null, null, null, null, null, null).isPlaintext()).isTrue();
+        assertThat(new OpcUaProperties(true, "http://x", "SIGN", null, null, null, null, null, null, null)
                 .isPlaintext()).isFalse();
     }
 

@@ -1309,6 +1309,39 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 - **分支覆盖率门禁未加**：本轮又一次证明行覆盖率会误导（90.5% 行覆盖下藏着两个 P0），
   starter/runtime 的分支覆盖仅 68%/71%。这是下一步最该补的门禁
 
+**③ OPC UA 安全策略与认证：本轮完成「安全守卫」，实现本身待下一步（2026-09-14）**
+
+**为什么没有直接接用户名密码**：用户名密码在 `SecurityPolicy#None` 下是**明文**传输的
+（Nonce 加密只在非 None 策略下生效），而本模块恰好还没实现任何非 None 策略。
+也就是说，「实现用户名密码认证」在当前状态下等于**把凭据明文发出去，同时让宿主以为认证过了**。
+凭据只有在有加密通道时才有意义，因此正确顺序是「**先证书管理 + 非 None 策略，再接凭据**」。
+
+本轮已完成的部分（可验证）：
+
+| 项 | 内容 |
+|---|---|
+| 配置面 | `OpcUaProperties` 新增 `username` / `credentialRef`（密码走 `CredentialResolver`，不落配置文件）|
+| **安全守卫** | 配置了凭据但策略为 `None` → **fail-fast 拒绝**，消息键 `iot.opcua.credentials.need-security`；装配期同步 WARN |
+| 回归用例 | `OPC-03b` 锁定「明文策略下的凭据必须被拒绝，而不是明文发送」|
+
+**下轮实现所需的 API 已全部实测确认**（省掉一轮调研）：
+
+| 用途 | 实测签名 |
+|---|---|
+| 用户名认证 | `new UsernameProvider(String username, String password)`（implements `IdentityProvider`）|
+| 证书校验 | `new DefaultClientCertificateValidator(TrustListManager, CertificateQuarantine)` |
+| 信任列表 | `MemoryTrustListManager`（内存）/ `FileBasedTrustListManager`（目录）|
+| 自签证书 | `SelfSignedCertificateGenerator` / `SelfSignedCertificateBuilder`（stack-core）|
+| 客户端配置 | `OpcUaClientConfigBuilder.setCertificate(X509Certificate)` / `setCertificateChain(X509Certificate[])` / `setCertificateValidator(...)` / `setIdentityProvider(...)` |
+| 端点选择 | `OpcUaClient.create(url, selectEndpoint, transportConfig, config)` —— 需按 `securityPolicy` 选择匹配端点 |
+
+**待办**：① 客户端证书加载（PKCS#12 + 口令，或开发期自签）；② 信任列表接入与「信任全部」的显式开关（必须 WARN）；③ 端点选择按策略匹配；④ 凭据真正接入后再放行 `hasCredentials()` 那条路径。
+
+> **流程教训（第八条）**：本轮我为接凭据写了半成品（`OpcUaProperties` 加了字段、守卫未写入），
+> 因**批量补丁脚本不校验替换是否真的发生**而未被发现，最后靠读回校验才暴露并撤回。
+> 这与母仓「教训七：门禁必须验证真的执行了」同源 —— **「脚本报成功」不等于「改动真的落地」**，
+> 我已把批量补丁改为「锚点未命中即抛错 + 写入后读回校验」的写法。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |
