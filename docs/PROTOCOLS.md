@@ -1162,6 +1162,33 @@ M0 不是「搭个空壳」，而是**把"能跑"这件事变成可验证事实*
 | 调度器 | 用 `ScheduledExecutorService`，未实现 DESIGN §4.4 的分层时间轮 | 通过 1 万连接门禁、准备冲击 10 万连接时（M0 门槛下堆开销与精度完全够用） |
 | Netty 传输 | 用 `NioEventLoopGroup`，未切 `EpollEventLoopGroup` | 同上（届时可拿到 `SO_REUSEPORT` 与更低系统调用开销） |
 
+**OPC UA 当前状态：API 已调研完毕，模块**刻意未提交**（2026-09-14）**
+
+本轮已把 OPC UA 模块写完并**编译通过**，但仍**主动撤回、未纳入构建**，原因如下：
+
+| 事实 | 说明 |
+|---|---|
+| 覆盖率仅 **13%** | 正向路径（`read`/`write`/`subscribe`/`browse`）**一次都没被执行过** |
+| 无真实服务端 harness | Milo 1.1.7 的服务端需要自建 `AddressSpace` + `Namespace` + 自定义 `UaVariableNode`，成本高于本轮预算 |
+| 已通过的部分 | 守卫路径（TLS 拒绝、非 None 安全策略拒绝、承载方式拒绝、探测不可达、NodeId 解析、装配四场景）|
+
+**为什么撤回而不是降阈值提交**：本里程碑连续三轮独立审核，每一轮都发现「未被执行到的代码里藏着 P0」
+（最近一次是我自己引入的保活探针误杀健康设备）。把**核心读写路径从未运行过**的模块标成「已完成」，
+正是这三轮审核一直在批评的行为。因此这里选择：**宁可不交付，也不交付未验证的核心代码**。
+
+**已完成、可供下轮直接使用的资产**（调研结论见本节末尾的 API 实测表）：
+- Milo 1.1.7 坐标与 8 类关键签名（含上次标注的首要未知项）：
+  `OpcUaMonitoredItem.setDataValueListener(DataValueListener)`，其函数式方法签名为
+  **`onDataReceived(OpcUaMonitoredItem, DataValue)`（两个参数）** —— 这一点若按文档猜测必错；
+  `OpcUaMonitoredItem(ReadValueId[, MonitoringMode])`；`ReadValueId(NodeId, UInteger, String, QualifiedName)`；
+  `ExpandedNodeId.toNodeId(NamespaceTable)`（**必须传命名空间表**，否则编译不过）；
+  `OpcUaSubscription(client, interval)` → `createAsync()` → `addMonitoredItems()` → `createMonitoredItems()`；
+  `ProtocolDescriptor.Builder.extensions(...)` 是**变长参数**而非 `Set`；
+  `OpcUaClient.create(String)` 抛**受检** `UaException`。
+- 一份可编译的模块草稿（含守卫测试）保存在 `/tmp/opcua-draft`（本机临时目录，不随仓库保留）。
+- 下轮的正确顺序：**先写 Milo 服务端 harness（地址空间 + 读写节点 + 订阅），再写模块**——
+  顺序反了就会出现本轮这种「写完无法验证」的局面。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |
