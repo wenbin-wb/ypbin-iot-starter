@@ -68,6 +68,9 @@ import org.slf4j.LoggerFactory;
  */
 public final class ModbusAdapter implements ProtocolAdapter {
 
+    /** 配置注入的默认从站地址（设备未声明 localAddress 时使用）。 */
+    private final int defaultUnitId;
+
     private static final Logger log = LoggerFactory.getLogger(ModbusAdapter.class);
 
     /** 协议标识。 */
@@ -109,6 +112,9 @@ public final class ModbusAdapter implements ProtocolAdapter {
     /** 无读取结果的消息键。 */
     public static final String MSG_NO_RESULT = "iot.modbus.read.no-result";
 
+    /** 会话已关闭的消息键。 */
+    public static final String MSG_SESSION_CLOSED = "iot.modbus.session.closed";
+
     /** 链路不可用的消息键。 */
     public static final String MSG_CONNECTION_INACTIVE = "iot.modbus.connection.inactive";
 
@@ -127,6 +133,32 @@ public final class ModbusAdapter implements ProtocolAdapter {
             .attribute("defaultPort", "502")
             .build();
 
+    /**
+     * 以默认从站地址创建适配器。
+     */
+    public ModbusAdapter() {
+        this(DEFAULT_UNIT_ID);
+    }
+
+    /**
+     * 创建适配器。
+     *
+     * @param defaultUnitId 设备未声明 from站地址时使用的默认 unitId
+     */
+    public ModbusAdapter(int defaultUnitId) {
+        this.defaultUnitId = defaultUnitId >= 0 && defaultUnitId <= MAX_UNIT_ID
+                ? defaultUnitId : DEFAULT_UNIT_ID;
+    }
+
+    /**
+     * 默认从站地址。
+     *
+     * @return 默认 unitId
+     */
+    public int defaultUnitId() {
+        return defaultUnitId;
+    }
+
     @Override
     public ProtocolDescriptor descriptor() {
         return DESCRIPTOR;
@@ -139,6 +171,11 @@ public final class ModbusAdapter implements ProtocolAdapter {
 
     @Override
     public CompletionStage<ProtocolConnection> open(ConnectionSpec spec, AdapterContext context) {
+        if (spec.tls().enabled()) {
+            // M0 已在 iot-transport 修过同类缺陷；协议模块自建客户端时极易复发，因此这里独立再拦一次
+            return Stages.failed(new ConnectionException(spec.connectionId(), IotMessageKeys.CONFIG_INVALID,
+                    "TLS not implemented; refusing plaintext connect"));
+        }
         String scheme = spec.endpoint().scheme();
         ModbusClient client;
         try {
@@ -220,7 +257,7 @@ public final class ModbusAdapter implements ProtocolAdapter {
         }
         try {
             ModbusSession session = new ModbusSession(device, modbusConnection, context,
-                    modbusConnection.polling());
+                    modbusConnection.polling(), defaultUnitId);
             modbusConnection.register(session);
             return CompletableFuture.completedFuture(session);
         } catch (RuntimeException ex) {

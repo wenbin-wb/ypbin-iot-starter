@@ -397,6 +397,31 @@ class ConnectionRegistryTest {
         }
     }
 
+    @Test
+    @DisplayName("CR-10 令牌桶必须有容量上限：长时间空闲后不得攒出超过配置速率的令牌")
+    void tokenBucketMustBeCapped() throws Exception {
+        int limitPerSecond = 5;
+        CountingAdapter adapter = new CountingAdapter(Duration.ZERO, null);
+        ConnectionRegistry registry = new ConnectionRegistry(Duration.ofMinutes(5), 1000, limitPerSecond,
+                0.0D, scheduler, Clock.systemUTC());
+        try {
+            // 模拟「Spring 启动耗时才首次建链」：桶在构造时是满的，若空闲补充不封顶，
+            // 首次 refill 会把桶灌成 elapsed×rate，限速闸门在启动风暴这个唯一目标场景下彻底失效
+            Thread.sleep(1200L);
+            long started = System.nanoTime();
+            for (int i = 0; i < 15; i++) {
+                registry.acquire(adapter, spec("cap-" + i), context).toCompletableFuture().join().release();
+            }
+            long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            // 容量上限 = 5，故 15 次至少需要补充 10 个令牌 ≈ 2000ms
+            assertThat(elapsedMillis)
+                    .as("令牌桶未封顶：15 次建链（限 %d/s）仅耗时 %d ms", limitPerSecond, elapsedMillis)
+                    .isGreaterThanOrEqualTo(1500L);
+        } finally {
+            registry.close();
+        }
+    }
+
     private static ConnectionSpec spec(String connectionId) {
         return new ConnectionSpec(connectionId, CODE, Endpoint.of("tcp://127.0.0.1:1"),
                 Duration.ofSeconds(2), Duration.ofSeconds(2), null, null, Map.of());

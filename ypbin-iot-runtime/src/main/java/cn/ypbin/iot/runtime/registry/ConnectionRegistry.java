@@ -79,6 +79,8 @@ public final class ConnectionRegistry implements AutoCloseable {
     /** 令牌桶定点运算倍率。 */
     private static final long TOKEN_SCALE = 1000L;
 
+    private static final long NANOS_PER_SECOND = Duration.ofSeconds(1).toNanos();
+
     private final ConcurrentMap<String, CompletableFuture<Entry>> entries = new ConcurrentHashMap<>();
 
     /** 保护 {@link #closed} 与「入表 + 发起建链 / 快照清表」的原子性。 */
@@ -190,17 +192,23 @@ public final class ConnectionRegistry implements AutoCloseable {
             return;
         }
         long capacity = tokensOf(connectRateLimit);
-        long refill = elapsedNanos * connectRateLimit / Duration.ofSeconds(1).toNanos() * TOKEN_SCALE;
+        // 溢出安全：先拆成「整秒 + 余数纳秒」再相乘。
+        // 原写法 elapsedNanos * rate 在长时间空闲后会溢出为负，导致 refill<=0 直接 return，
+        // 而 CAS 不执行又让 lastRefillNanos 永不推进 —— 桶永远为 0，取令牌死循环。
+        long wholeSeconds = elapsedNanos / NANOS_PER_SECOND;
+        long remainderNanos = elapsedNanos % NANOS_PER_SECOND;
+        long refill = wholeSeconds * connectRateLimit * TOKEN_SCALE
+                + remainderNanos * connectRateLimit / NANOS_PER_SECOND * TOKEN_SCALE;
         if (refill <= 0L) {
             return;
         }
         if (!lastRefillNanos.compareAndSet(last, now)) {
             return;
         }
-        long updated = Math.min(capacity, availableTokens.addAndGet(refill));
-        if (updated < 0L) {
-            availableTokens.set(capacity);
-        }
+        // 必须把 min 的结果写回：原实现把 Math.min 的结果丢弃，只有溢出为负时才回写，
+        // 于是桶的容量实际上没有上限 —— 空闲 5s 就能攒出 10 倍于配置速率的令牌，
+        // 限速闸门在「启动风暴」这个唯一目标场景下完全失效。
+        availableTokens.updateAndGet(current -> Math.min(capacity, current + refill));
     }
 
     private static void sleepQuietly(long millis) {
@@ -251,6 +259,7 @@ public final class ConnectionRegistry implements AutoCloseable {
         CompletableFuture<Entry> fresh = new CompletableFuture<>();
         CompletableFuture<Entry> target = null;
         boolean staleFailure = false;
+        boolean mustOpen = false;
         lifecycle.readLock().lock();
         try {
             if (closed) {
@@ -274,17 +283,31 @@ public final class ConnectionRegistry implements AutoCloseable {
                 target = fresh;
             } else {
                 target = fresh;
-                // 限速在锁外等待会破坏「入表 + 建链」的原子性（期间新调用者会拿到未启动的 fresh），
-                // 因此这里在读写锁内取令牌。代价是限速期间 acquire 会短暂阻塞，
-                // 这正是"闸门"的语义：宁可让调用方等一下，也不让 10 万次握手同时冲向对端。
-                long waited = acquireConnectToken();
-                if (waited > 0L) {
-                    connectThrottleWaitMillis.addAndGet(waited);
-                }
-                openAsync(adapter, spec, context, key, fresh);
+                mustOpen = true;
             }
         } finally {
             lifecycle.readLock().unlock();
+        }
+        if (mustOpen) {
+            // 限速等待必须在锁外：在读锁内 sleep 会把 closeAll（需写锁）拖住，
+            // 实测 6 并发/2 每秒就让停机阻塞近 3 秒，10 万连接规模下不可接受。
+            long waited = acquireConnectToken();
+            if (waited > 0L) {
+                connectThrottleWaitMillis.addAndGet(waited);
+            }
+            // 等待期间可能已被 closeAll 清表：必须复核条目仍是自己的，否则会建出无人关闭的孤儿链路
+            lifecycle.readLock().lock();
+            try {
+                if (closed || entries.get(key) != fresh) {
+                    entries.remove(key, fresh);
+                    fresh.completeExceptionally(new ConnectionException(key, IotMessageKeys.CONNECTION_CLOSED));
+                    target = fresh;
+                } else {
+                    openAsync(adapter, spec, context, key, fresh);
+                }
+            } finally {
+                lifecycle.readLock().unlock();
+            }
         }
         if (staleFailure) {
             return acquireAttempt(adapter, spec, context, key, remainingAttempts - 1);

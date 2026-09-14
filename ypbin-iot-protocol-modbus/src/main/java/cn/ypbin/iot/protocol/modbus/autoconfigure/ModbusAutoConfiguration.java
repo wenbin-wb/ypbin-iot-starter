@@ -56,6 +56,6 @@ public class ModbusAutoConfiguration {
     @ConditionalOnMissingBean(ModbusAdapter.class)
     public ModbusAdapter iotModbusAdapter(ModbusProperties properties) {
         log.debug("[ypbin-iot] iotModbusAdapter configured (defaultUnitId={}).", properties.defaultUnitId());
-        return new ModbusAdapter();
+        return new ModbusAdapter(properties.defaultUnitId());
     }
 }

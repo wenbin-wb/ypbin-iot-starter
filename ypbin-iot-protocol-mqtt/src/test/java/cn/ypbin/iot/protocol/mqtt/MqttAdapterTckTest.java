@@ -17,6 +17,7 @@ package cn.ypbin.iot.protocol.mqtt;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.ypbin.iot.core.exception.AddressParseException;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
@@ -67,7 +68,7 @@ class MqttAdapterTckTest extends AbstractProtocolAdapterTckTest {
         } catch (IOException ex) {
             throw new IllegalStateException("failed to start embedded mqtt broker", ex);
         }
-        adapter = new MqttAdapter(new MqttProperties(null, null, null, 1, null, null));
+        adapter = new MqttAdapter(new MqttProperties(null, null, null, 1, null));
     }
 
     @Override
@@ -197,7 +198,9 @@ class MqttAdapterTckTest extends AbstractProtocolAdapterTckTest {
             Throwable error = session.subscribe(
                             SubscribeRequest.of(List.of(PointAddress.of("a/b+/c"))), null)
                     .toCompletableFuture().handle((handle, ex) -> ex).join();
-            assertThat(error).isInstanceOf(UnsupportedCapabilityException.class);
+            // 过滤器非法是配置错误，不是"协议不支持订阅"：用 UnsupportedCapabilityException
+            // 会让宿主把配置写错误判成协议能力缺失而统一降级
+            assertThat(error).isInstanceOf(AddressParseException.class);
         } finally {
             closeQuietly(session);
         }

@@ -17,6 +17,8 @@ package cn.ypbin.iot.protocol.mqtt;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.LogLevel;
+import cn.ypbin.iot.core.exception.AddressParseException;
+import cn.ypbin.iot.core.exception.ProtocolException;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.DataBatch;
 import cn.ypbin.iot.core.model.DataListener;
@@ -46,6 +48,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -90,6 +93,9 @@ final class MqttSession implements DeviceSession {
     private final Map<String, Subscription> subscriptions = new ConcurrentHashMap<>();
 
     private final AtomicLong sequence = new AtomicLong();
+
+    /** 无请求超时配置时的兜底上限。 */
+    private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
     /**
      * 创建会话。
@@ -160,6 +166,13 @@ final class MqttSession implements DeviceSession {
 
     private CompletionStage<Void> publishOne(PointWrite write, List<PointWriteStatus> statuses) {
         String topic = write.address().raw();
+        // 发布主题必须是具体主题：通配符/空/超长都不能用来发布。
+        // 不校验的后果是协议库**同步抛 IllegalArgumentException**，在批量写里会把整批打断，
+        // 且异常被 thenCompose 包成 CompletionException（违反逐项失败与 C11 两条契约）。
+        if (!MqttTopicMatcher.isValidFilter(topic) || topic.indexOf('+') >= 0 || topic.indexOf('#') >= 0) {
+            statuses.add(PointWriteStatus.fail(write.address(), MqttAdapter.MSG_TOPIC_INVALID));
+            return CompletableFuture.completedFuture(null);
+        }
         byte[] payload;
         try {
             payload = toPayload(write.value());
@@ -167,12 +180,24 @@ final class MqttSession implements DeviceSession {
             statuses.add(PointWriteStatus.fail(write.address(), MqttAdapter.MSG_VALUE_INVALID));
             return CompletableFuture.completedFuture(null);
         }
-        return connection.client().publishWith()
-                .topic(topic)
-                .qos(qosOf(write))
-                .retain(retainedOf(write))
-                .payload(payload)
-                .send()
+        CompletionStage<?> stage;
+        try {
+            // builder 段整体纳入 try：协议库对非法参数是同步抛，同步抛会绕过 Stage 契约
+            stage = connection.client().publishWith()
+                    .topic(topic)
+                    .qos(qosOf(write))
+                    .retain(retainedOf(write))
+                    .payload(payload)
+                    .send();
+        } catch (RuntimeException ex) {
+            statuses.add(PointWriteStatus.fail(write.address(), MqttAdapter.MSG_PUBLISH_FAILED));
+            return CompletableFuture.completedFuture(null);
+        }
+        return stage
+                // 发布必须显式超时：断网时客户端会把请求排队等重连，返回永不完成的 future，
+                // 批量写里第一项挂住后续项就永不执行（R15）
+                .toCompletableFuture()
+                .orTimeout(Math.max(1L, requestTimeoutMillis()), TimeUnit.MILLISECONDS)
                 .handle((result, error) -> {
                     if (error == null) {
                         statuses.add(PointWriteStatus.ok(write.address()));
@@ -183,6 +208,12 @@ final class MqttSession implements DeviceSession {
                     }
                     return null;
                 });
+    }
+
+    private long requestTimeoutMillis() {
+        Duration timeout = context.settings().requestTimeout();
+        return timeout == null || timeout.isZero() || timeout.isNegative()
+                ? DEFAULT_REQUEST_TIMEOUT.toMillis() : timeout.toMillis();
     }
 
     /**
@@ -228,15 +259,16 @@ final class MqttSession implements DeviceSession {
     @Override
     public CompletionStage<SubscriptionHandle> subscribe(SubscribeRequest request, DataListener listener) {
         if (closed.get()) {
-            return CompletableFuture.failedFuture(new UnsupportedCapabilityException(
-                    MqttAdapter.PROTOCOL_CODE, "subscribe (session closed)"));
+            return CompletableFuture.failedFuture(
+                    new ProtocolException(MqttAdapter.MSG_SESSION_CLOSED, device.deviceId()));
         }
         List<String> filters = new ArrayList<>(request.addresses().size());
         for (PointAddress address : request.addresses()) {
             String filter = address.raw();
             if (!MqttTopicMatcher.isValidFilter(filter)) {
-                return CompletableFuture.failedFuture(new UnsupportedCapabilityException(
-                        MqttAdapter.PROTOCOL_CODE, "subscribe (invalid topic filter: " + filter + ")"));
+                return CompletableFuture.failedFuture(
+                        new AddressParseException(MqttAdapter.PROTOCOL_CODE, filter,
+                                "invalid topic filter; wildcards must occupy a whole level and '#' must be last"));
             }
             filters.add(filter);
         }
@@ -252,6 +284,7 @@ final class MqttSession implements DeviceSession {
                     .qos(qos)
                     .callback(publish -> dispatch(subscription, publish))
                     .send()
+                    .orTimeout(requestTimeoutMillis(), TimeUnit.MILLISECONDS)
                     .thenApply(ignoredResult -> null));
         }
         chain.whenComplete((ignored, error) -> {
@@ -318,6 +351,7 @@ final class MqttSession implements DeviceSession {
             chain = chain.thenCompose(ignored -> connection.client().unsubscribeWith()
                     .topicFilter(filter)
                     .send()
+                    .orTimeout(requestTimeoutMillis(), TimeUnit.MILLISECONDS)
                     .thenApply(ignoredResult -> null));
         }
         return chain.exceptionally(error -> {

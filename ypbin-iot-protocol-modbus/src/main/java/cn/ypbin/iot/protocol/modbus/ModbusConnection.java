@@ -27,6 +27,7 @@ import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.runtime.subscription.PollingSubscriptionManager;
 import com.digitalpetri.modbus.client.ModbusClient;
+import com.digitalpetri.modbus.pdu.ReadHoldingRegistersRequest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -35,6 +36,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +66,9 @@ final class ModbusConnection implements ProtocolConnection {
     /** 保活任务：定期检查链路是否仍然连接，断开则触发注册中心重连。 */
     private final TaskScheduler.ScheduledTask keepAliveTask;
 
+    /** 保活探测的等待上限。 */
+    private final Duration keepAliveProbeTimeout;
+
     private final Instant openedAt = Instant.now();
 
     private final CompletableFuture<CloseReason> closeReason = new CompletableFuture<>();
@@ -79,6 +84,7 @@ final class ModbusConnection implements ProtocolConnection {
         this.client = client;
         this.polling = new PollingSubscriptionManager(context.scheduler(), context);
         Duration keepAlive = context.settings().keepAliveInterval();
+        this.keepAliveProbeTimeout = spec.requestTimeout();
         // 远程静默断开不会产生任何回调，只能主动探活：这也是 DESIGN §5.2 N9 要求的保活
         this.keepAliveTask = keepAlive == null || keepAlive.isZero() || keepAlive.isNegative()
                 ? null
@@ -94,15 +100,34 @@ final class ModbusConnection implements ProtocolConnection {
         return polling;
     }
 
+    /**
+     * 保活探测。
+     *
+     * <p><b>必须发一次真实协议请求</b>：{@code client.isConnected()} 只反映本端 Netty channel 状态，
+     * 对端「accept 后永不响应」这种最恶劣的假死形态完全检测不到（本端链路仍是 ESTABLISHED）。
+     * 这里读一次设备标识寄存器（0x0000 起始 1 个寄存器），任何响应都算活着。</p>
+     */
     private void checkAlive() {
-        if (closed.get()) {
+        if (closed.get() || sessions.isEmpty()) {
             return;
         }
         if (!client.isConnected()) {
             log.warn("[ypbin-iot] modbus connection {} is no longer connected; notifying registry",
                     connectionId());
             onConnectionLost(null);
+            return;
         }
+        int probeUnit = sessions.values().iterator().next().unitId();
+        client.readHoldingRegistersAsync(probeUnit, new ReadHoldingRegistersRequest(0, 1))
+                .toCompletableFuture()
+                .orTimeout(Math.max(1L, keepAliveProbeTimeout.toMillis()), TimeUnit.MILLISECONDS)
+                .whenComplete((response, error) -> {
+                    if (error != null) {
+                        log.warn("[ypbin-iot] modbus connection {} failed keep-alive probe; "
+                                + "treating as dead so the registry can reconnect", connectionId(), error);
+                        onConnectionLost(error);
+                    }
+                });
     }
 
     ModbusClient client() {

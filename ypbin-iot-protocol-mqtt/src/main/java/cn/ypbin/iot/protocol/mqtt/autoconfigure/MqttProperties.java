@@ -28,7 +28,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param cleanSession           是否以干净会话启动（false 时 broker 保留离线消息与订阅）
  * @param qosDefault             默认服务质量等级（0/1/2）
  * @param retainedDefault        发布时是否默认保留
- * @param sharedGroup            共享订阅组名；为空表示不使用共享订阅
  * @author wenbin
  * @since 2026-09-13
  */
@@ -38,8 +37,7 @@ public record MqttProperties(
         String clientIdPrefix,
         Boolean cleanSession,
         Integer qosDefault,
-        Boolean retainedDefault,
-        String sharedGroup) {
+        Boolean retainedDefault) {
 
     /** 配置前缀。 */
     public static final String PREFIX = "ypbin.iot.protocol.mqtt";

@@ -17,7 +17,6 @@ package cn.ypbin.iot.protocol.modbus;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.exception.ProtocolException;
-import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.DataListener;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.PingResult;
@@ -34,6 +33,7 @@ import cn.ypbin.iot.core.model.SubscriptionHandle;
 import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
 import cn.ypbin.iot.core.protocol.DeviceSession;
+import cn.ypbin.iot.core.util.Stages;
 import cn.ypbin.iot.runtime.subscription.PollingSubscriptionManager;
 import com.digitalpetri.modbus.client.ModbusClient;
 import com.digitalpetri.modbus.pdu.ModbusResponsePdu;
@@ -57,6 +57,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -106,20 +107,20 @@ final class ModbusSession implements DeviceSession {
      * @param polling    轮询订阅管理器
      */
     ModbusSession(DeviceSpec device, ModbusConnection connection, AdapterContext context,
-            PollingSubscriptionManager polling) {
+            PollingSubscriptionManager polling, int defaultUnitId) {
         this.device = device;
         this.connection = connection;
         this.context = context;
         this.polling = polling;
-        this.unitId = parseUnitId(device);
+        this.unitId = parseUnitId(device, defaultUnitId);
         this.boundAt = context.clock().instant();
         this.sessionId = device.deviceId() + "@" + connection.connectionId() + "#" + unitId;
     }
 
-    private static int parseUnitId(DeviceSpec device) {
+    private static int parseUnitId(DeviceSpec device, int defaultUnitId) {
         String local = device.localAddress();
         if (local == null || local.isBlank()) {
-            return ModbusAdapter.DEFAULT_UNIT_ID;
+            return defaultUnitId;
         }
         try {
             int unitId = Integer.parseInt(local.trim());
@@ -130,6 +131,15 @@ final class ModbusSession implements DeviceSession {
         } catch (NumberFormatException ex) {
             throw new ProtocolException(ex, ModbusAdapter.MSG_UNIT_ID_INVALID, device.deviceId(), local);
         }
+    }
+
+    /**
+     * 从站地址（保活探测需要）。
+     *
+     * @return unitId
+     */
+    int unitId() {
+        return unitId;
     }
 
     String localAddressKey() {
@@ -183,6 +193,12 @@ final class ModbusSession implements DeviceSession {
             chain = chain.thenCompose(ignored -> executeChunk(chunk, collected, request));
         }
         return chain.thenApply(ignored -> {
+            // SPI §4.2：整条链路不可用时必须异常完成，否则宿主（与框架的退避逻辑）
+            // 无法区分「个别点位坏」与「链路已死」——后者会表现为全速轮询永远返回 BAD。
+            if (!collected.isEmpty() && collected.values().stream().noneMatch(PointValue::isGood)
+                    && !connection.state().isUsable()) {
+                throw new ProtocolException(ModbusAdapter.MSG_CONNECTION_INACTIVE, device.deviceId());
+            }
             Instant finished = context.clock().instant();
             List<PointValue> values = new ArrayList<>(request.addresses().size());
             for (PointAddress address : request.addresses()) {
@@ -215,11 +231,21 @@ final class ModbusSession implements DeviceSession {
                 byte[] packed = chunk.type() == ModbusRegisterType.COIL
                         ? ((ReadCoilsResponse) response).coils()
                         : ((ReadDiscreteInputsResponse) response).inputs();
+                int expectedBytes = (quantity + 7) / 8;
                 for (Map.Entry<PointAddress, ModbusAddress> entry : chunk.addresses().entrySet()) {
                     int index = entry.getValue().offset() - start;
+                    if (packed == null || index < 0 || index / 8 >= packed.length) {
+                        // 响应比请求短：缺失的线圈**不能当成 false**（那是编造数据），必须标 BAD
+                        collected.put(entry.getKey(), PointValue.bad(entry.getKey(), Quality.BAD,
+                                ModbusAdapter.MSG_RESPONSE_TOO_SHORT, context.clock().instant()));
+                        continue;
+                    }
                     boolean value = unpackBit(packed, index);
                     collected.put(entry.getKey(), PointValue.good(entry.getKey(), value,
                             context.clock().instant()));
+                }
+                if (packed.length < expectedBytes) {
+                    context.metrics().recordError(ModbusAdapter.MSG_RESPONSE_TOO_SHORT);
                 }
                 return null;
             });
@@ -259,7 +285,9 @@ final class ModbusSession implements DeviceSession {
      */
     private void markChunkFailed(Chunk chunk, Map<PointAddress, PointValue> collected, Throwable error,
             Duration timeout) {
-        boolean timeoutError = error instanceof java.util.concurrent.TimeoutException;
+        // 必须先用 Stages.unwrap 剥掉 CompletionException 包装：协议库的 thenApply 链会把
+        // 直接的 TimeoutException 包一层，裸 instanceof 恒为 false（该分支此前从未生效）
+        boolean timeoutError = Stages.unwrap(error) instanceof TimeoutException;
         Instant now = context.clock().instant();
         for (PointAddress address : chunk.addresses().keySet()) {
             collected.put(address, PointValue.bad(address, Quality.BAD,
@@ -406,7 +434,7 @@ final class ModbusSession implements DeviceSession {
     public CompletionStage<SubscriptionHandle> subscribe(SubscribeRequest request, DataListener listener) {
         if (closed.get()) {
             return CompletableFuture.failedFuture(
-                    new UnsupportedCapabilityException(ModbusAdapter.PROTOCOL_CODE, "subscribe (session closed)"));
+                    new ProtocolException(ModbusAdapter.MSG_SESSION_CLOSED, device.deviceId()));
         }
         return CompletableFuture.completedFuture(polling.subscribe(this, request, listener));
     }

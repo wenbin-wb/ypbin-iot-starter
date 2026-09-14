@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.DataEgress;
 import cn.ypbin.iot.core.exception.ConnectionException;
+import cn.ypbin.iot.core.exception.ProtocolException;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DataBatch;
@@ -78,7 +79,7 @@ class MqttEdgeCaseTest {
         context = new DefaultAdapterContext(MqttAdapter.PROTOCOL_CODE,
                 DefaultAdapterSettings.defaults(), new NoopEgress(), scheduler,
                 NoopMetricsRecorder.INSTANCE, new EnvCredentialResolver(), Clock.systemUTC(), 32);
-        adapter = new MqttAdapter(new MqttProperties(null, null, null, 2, null, null));
+        adapter = new MqttAdapter(new MqttProperties(null, null, null, 2, null));
     }
 
     @AfterEach
@@ -106,6 +107,50 @@ class MqttEdgeCaseTest {
         Throwable error = adapter.open(spec, context).toCompletableFuture()
                 .handle((connection, ex) -> ex).join();
         assertThat(error).isInstanceOf(ConnectionException.class);
+    }
+
+    @Test
+    @DisplayName("MQE-02b ssl/mqtts/ws/wss 未实现时必须拒绝，不得静默走明文 TCP")
+    void unimplementedSchemesMustBeRejected() {
+        for (String scheme : List.of("ssl", "mqtts", "ws", "wss")) {
+            ConnectionSpec spec = spec("scheme-" + scheme,
+                    scheme + "://127.0.0.1:" + broker.port());
+            Throwable error = adapter.open(spec, context).toCompletableFuture()
+                    .handle((connection, ex) -> {
+                        if (connection != null) {
+                            connection.close();
+                        }
+                        return ex;
+                    })
+                    .orTimeout(5, TimeUnit.SECONDS).join();
+            assertThat(error)
+                    .as("%s:// 尚未实现，必须拒绝而不是给出一条明文连接", scheme)
+                    .isInstanceOf(ConnectionException.class);
+        }
+    }
+
+    @Test
+    @DisplayName("MQE-02c 发布含通配符/空主题必须逐项失败，且不得同步抛出")
+    void invalidPublishTopicMustFailPerItem() {
+        DeviceSession session = openSession();
+        try {
+            // 注：空地址在 core 层构造 PointAddress 时就被拒绝，故此处只覆盖通配符
+            WriteResult result = session.write(WriteRequest.of(
+                            new PointWrite(PointAddress.of("factory/line1/ok"), "1"),
+                            new PointWrite(PointAddress.of("factory/x/+/temp"), "2"),
+                            new PointWrite(PointAddress.of("factory/x/#"), "3"),
+                            new PointWrite(PointAddress.of("factory/line1/ok2"), "5")))
+                    .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
+            // 关键：整批必须正常完成并逐项标记，而不是异常完成（协议库对非法主题是同步抛）
+            assertThat(result.statuses()).hasSize(4);
+            assertThat(result.statuses().get(0).success()).isTrue();
+            assertThat(result.statuses().get(1).success()).as("通配 + 不能用于发布").isFalse();
+            assertThat(result.statuses().get(2).success()).as("通配 # 不能用于发布").isFalse();
+            assertThat(result.statuses().get(3).success()).as("坏地址之后的写项仍须执行").isTrue();
+            assertThat(result.statuses().get(1).reason()).isEqualTo(MqttAdapter.MSG_TOPIC_INVALID);
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
     }
 
     @Test
@@ -196,7 +241,7 @@ class MqttEdgeCaseTest {
         Throwable error = session.subscribe(
                         SubscribeRequest.of(List.of(PointAddress.of("a/b"))), null)
                 .toCompletableFuture().handle((handle, ex) -> ex).join();
-        assertThat(error).isInstanceOf(UnsupportedCapabilityException.class);
+        assertThat(error).isInstanceOf(ProtocolException.class);
 
         PingResult dead = session.ping().toCompletableFuture().join();
         assertThat(dead.alive()).isFalse();

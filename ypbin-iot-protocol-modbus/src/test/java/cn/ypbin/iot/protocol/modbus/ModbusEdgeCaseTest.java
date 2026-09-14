@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.DataEgress;
+import cn.ypbin.iot.core.exception.ConnectionException;
+import cn.ypbin.iot.core.exception.ProtocolException;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.CloseReason;
 import cn.ypbin.iot.core.model.ConnectionSpec;
@@ -34,6 +36,7 @@ import cn.ypbin.iot.core.model.ReadRequest;
 import cn.ypbin.iot.core.model.ReadResult;
 import cn.ypbin.iot.core.model.SessionState;
 import cn.ypbin.iot.core.model.SubscribeRequest;
+import cn.ypbin.iot.core.model.TlsOptions;
 import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
 import cn.ypbin.iot.core.protocol.DeviceSession;
@@ -116,6 +119,25 @@ class ModbusEdgeCaseTest {
         }
         assertThat(connection.state()).isEqualTo(SessionState.CLOSED);
         connection.close();
+    }
+
+    @Test
+    @DisplayName("MBE-01b TLS 未实现时必须拒绝，不得静默明文建链")
+    void tlsMustFailFastInsteadOfSilentPlaintext() {
+        ConnectionSpec tlsSpec = new ConnectionSpec("tls", ModbusAdapter.PROTOCOL_CODE,
+                Endpoint.of("tcp://127.0.0.1:" + server.port()), Duration.ofSeconds(3),
+                Duration.ofSeconds(3), TlsOptions.enabledDefault(), null, Map.of());
+        Throwable error = adapter.open(tlsSpec, context).toCompletableFuture()
+                .handle((connection, ex) -> {
+                    if (connection != null) {
+                        connection.close();
+                    }
+                    return ex;
+                })
+                .orTimeout(5, TimeUnit.SECONDS).join();
+        // M0 已在 iot-transport 修过同类缺陷；协议模块自建客户端时极易复发，
+        // 因此这条用例是防复发门禁，不能只断言 error != null
+        assertThat(error).isInstanceOf(ConnectionException.class);
     }
 
     @Test
@@ -312,7 +334,7 @@ class ModbusEdgeCaseTest {
         Throwable error = session.subscribe(
                         SubscribeRequest.of(List.of(PointAddress.of("holding:0"))), null)
                 .toCompletableFuture().handle((handle, ex) -> ex).join();
-        assertThat(error).isInstanceOf(UnsupportedCapabilityException.class);
+        assertThat(error).isInstanceOf(ProtocolException.class);
         assertThat(session.state()).isEqualTo(SessionState.CLOSED);
         assertThat(session.unwrap(ProtocolCapability.class)).isEmpty();
         assertThat(session.device().deviceId()).isNotBlank();

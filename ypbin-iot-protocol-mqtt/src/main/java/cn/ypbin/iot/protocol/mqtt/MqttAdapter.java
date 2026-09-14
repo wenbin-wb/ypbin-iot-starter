@@ -83,6 +83,12 @@ public final class MqttAdapter implements ProtocolAdapter {
     /** 生成客户端标识用的序号（同进程多链路必须唯一，否则 broker 会互踢）。 */
     private static final AtomicLong CLIENT_SEQUENCE = new AtomicLong();
 
+    /** 发布主题非法的消息键。 */
+    public static final String MSG_TOPIC_INVALID = "iot.mqtt.topic.invalid";
+
+    /** 会话已关闭的消息键。 */
+    public static final String MSG_SESSION_CLOSED = "iot.mqtt.session.closed";
+
     /** 值类型不支持的消息键。 */
     public static final String MSG_VALUE_INVALID = "iot.mqtt.value.invalid";
 
@@ -118,13 +124,16 @@ public final class MqttAdapter implements ProtocolAdapter {
 
     private final MqttProperties properties;
 
+    /** 承载 onConnected/onDisconnected 回调的当前链路句柄（单链路适配器实例内独占）。 */
+    private volatile MqttConnection pendingConnection;
+
     /**
      * 创建适配器。
      *
      * @param properties MQTT 配置
      */
     public MqttAdapter(MqttProperties properties) {
-        this.properties = properties == null ? new MqttProperties(null, null, null, null, null, null)
+        this.properties = properties == null ? new MqttProperties(null, null, null, null, null)
                 : properties;
     }
 
@@ -142,8 +151,9 @@ public final class MqttAdapter implements ProtocolAdapter {
     public CompletionStage<ProtocolConnection> open(ConnectionSpec spec, AdapterContext context) {
         Endpoint endpoint = spec.endpoint();
         String scheme = endpoint.scheme();
-        if (!"tcp".equals(scheme) && !"mqtt".equals(scheme) && !"ssl".equals(scheme)
-                && !"mqtts".equals(scheme) && !"ws".equals(scheme) && !"wss".equals(scheme)) {
+        if (!"tcp".equals(scheme) && !"mqtt".equals(scheme)) {
+            // 只接受明文 TCP 的两种写法。TLS（ssl/mqtts）与 WebSocket（ws/wss）**尚未实现**，
+            // 此前把它们放进白名单会让用户以为在加密，实际拿到明文连接 —— 安全静默降级。
             return Stages.failed(new ConnectionException(spec.connectionId(), MSG_TRANSPORT_UNSUPPORTED, scheme));
         }
         if (spec.tls().enabled()) {
@@ -159,6 +169,14 @@ public final class MqttAdapter implements ProtocolAdapter {
                     .serverHost(endpoint.host())
                     .serverPort(port)
                     .automaticReconnectWithDefaultConfig();
+            builder.addDisconnectedListener(disconnectContext -> {
+                // 断线必须上抛给框架：否则 whenClosed 永不完成、state 永为 ONLINE，
+                // broker 永久不可达时系统会一直显示健康而数据已断流（静默失败）。
+                MqttConnection lost = pendingConnection;
+                if (lost != null) {
+                    lost.onConnectionLost(disconnectContext.getCause());
+                }
+            });
             client = builder.buildAsync();
         } catch (RuntimeException ex) {
             return Stages.failed(new ConnectionException(spec.connectionId(), ex,
@@ -174,6 +192,7 @@ public final class MqttAdapter implements ProtocolAdapter {
                 .orTimeout(Math.max(1L, spec.connectTimeout().toMillis()), TimeUnit.MILLISECONDS)
                 .thenApply(connAck -> {
                     MqttConnection connection = new MqttConnection(spec, client);
+                    pendingConnection = connection;
                     log.debug("[ypbin-iot] mqtt connection {} opened to {}:{}.", spec.connectionId(),
                             endpoint.host(), port);
                     return (ProtocolConnection) connection;
@@ -190,8 +209,9 @@ public final class MqttAdapter implements ProtocolAdapter {
      * <p>必须<b>进程内唯一</b>：broker 看到相同 clientId 的第二个连接时会把第一个踢掉，
      * 表现为「新连接一上来旧连接就断」的诡异循环。这里用配置前缀 + 连接标识 + 序号保证唯一。</p>
      */
-    private static String clientId(ConnectionSpec spec) {
-        return spec.connectionId() + "-" + CLIENT_SEQUENCE.incrementAndGet();
+    private String clientId(ConnectionSpec spec) {
+        return properties.clientIdPrefix() + "-" + spec.connectionId() + "-"
+                + CLIENT_SEQUENCE.incrementAndGet();
     }
 
     @Override

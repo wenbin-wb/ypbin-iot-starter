@@ -84,18 +84,18 @@ class MqttAutoConfigurationTest {
     @Test
     @DisplayName("MQCFG-05 配置默认值与边界归一化")
     void propertiesMustNormalizeDefaults() {
-        MqttProperties defaults = new MqttProperties(null, null, null, null, null, null);
+        MqttProperties defaults = new MqttProperties(null, null, null, null, null);
         assertThat(defaults.isEnabled()).isTrue();
         assertThat(defaults.isCleanSession()).isTrue();
         assertThat(defaults.isRetainedDefault()).isFalse();
         assertThat(defaults.qosDefault()).isEqualTo(1);
         assertThat(defaults.clientIdPrefix()).isEqualTo(MqttProperties.DEFAULT_CLIENT_ID_PREFIX);
 
-        assertThat(new MqttProperties(true, "  ", true, 9, null, null).qosDefault())
+        assertThat(new MqttProperties(true, "  ", true, 9, null).qosDefault())
                 .as("QoS 超出 0~2 必须回落到默认值而不是带病运行")
                 .isEqualTo(1);
-        assertThat(new MqttProperties(true, null, false, 0, false, null).isCleanSession()).isFalse();
-        assertThat(new MqttProperties(false, null, null, 2, null, null).isEnabled()).isFalse();
+        assertThat(new MqttProperties(true, null, false, 0, false).isCleanSession()).isFalse();
+        assertThat(new MqttProperties(false, null, null, 2, null).isEnabled()).isFalse();
     }
 
     /**
