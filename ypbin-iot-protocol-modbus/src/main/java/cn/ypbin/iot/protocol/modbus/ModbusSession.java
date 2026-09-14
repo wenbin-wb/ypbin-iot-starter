@@ -192,10 +192,11 @@ final class ModbusSession implements DeviceSession {
         for (Chunk chunk : chunks) {
             chain = chain.thenCompose(ignored -> executeChunk(chunk, collected, request));
         }
-        return chain.thenApply(ignored -> {
+        return Stages.normalize(chain.thenApply(ignored -> {
             // SPI §4.2：整条链路不可用时必须异常完成，否则宿主（与框架的退避逻辑）
             // 无法区分「个别点位坏」与「链路已死」——后者会表现为全速轮询永远返回 BAD。
-            if (!collected.isEmpty() && collected.values().stream().noneMatch(PointValue::isGood)
+            boolean hasConfiguredPoints = !parsed.isEmpty();
+            if (hasConfiguredPoints && collected.values().stream().noneMatch(PointValue::isGood)
                     && !connection.state().isUsable()) {
                 throw new ProtocolException(ModbusAdapter.MSG_CONNECTION_INACTIVE, device.deviceId());
             }
@@ -209,7 +210,7 @@ final class ModbusSession implements DeviceSession {
             Duration elapsed = Duration.between(started, finished);
             context.metrics().recordRead(elapsed, true);
             return new ReadResult(values, elapsed);
-        });
+        }));
     }
 
     private CompletionStage<Void> executeChunk(Chunk chunk, Map<PointAddress, PointValue> collected,

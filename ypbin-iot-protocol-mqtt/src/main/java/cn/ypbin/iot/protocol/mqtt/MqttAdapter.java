@@ -124,9 +124,6 @@ public final class MqttAdapter implements ProtocolAdapter {
 
     private final MqttProperties properties;
 
-    /** 承载 onConnected/onDisconnected 回调的当前链路句柄（单链路适配器实例内独占）。 */
-    private volatile MqttConnection pendingConnection;
-
     /**
      * 创建适配器。
      *
@@ -162,6 +159,9 @@ public final class MqttAdapter implements ProtocolAdapter {
                     "TLS not implemented in M1; refusing plaintext connect"));
         }
         int port = endpoint.port() > 0 ? endpoint.port() : DEFAULT_PORT;
+        // 用 open() 内的局部 holder 绑定断线回调：适配器是 Spring 单例、可同时服务多条链路，
+        // 用实例字段承载「当前链路」会让多条链路串台（A 断线却把 B 标记为 FAILED）
+        CompletableFuture<MqttConnection> holder = new CompletableFuture<>();
         Mqtt3AsyncClient client;
         try {
             Mqtt3ClientBuilder builder = Mqtt3Client.builder()
@@ -172,10 +172,7 @@ public final class MqttAdapter implements ProtocolAdapter {
             builder.addDisconnectedListener(disconnectContext -> {
                 // 断线必须上抛给框架：否则 whenClosed 永不完成、state 永为 ONLINE，
                 // broker 永久不可达时系统会一直显示健康而数据已断流（静默失败）。
-                MqttConnection lost = pendingConnection;
-                if (lost != null) {
-                    lost.onConnectionLost(disconnectContext.getCause());
-                }
+                holder.thenAccept(connection -> connection.onConnectionLost(disconnectContext.getCause()));
             });
             client = builder.buildAsync();
         } catch (RuntimeException ex) {
@@ -192,7 +189,7 @@ public final class MqttAdapter implements ProtocolAdapter {
                 .orTimeout(Math.max(1L, spec.connectTimeout().toMillis()), TimeUnit.MILLISECONDS)
                 .thenApply(connAck -> {
                     MqttConnection connection = new MqttConnection(spec, client);
-                    pendingConnection = connection;
+                    holder.complete(connection);
                     log.debug("[ypbin-iot] mqtt connection {} opened to {}:{}.", spec.connectionId(),
                             endpoint.host(), port);
                     return (ProtocolConnection) connection;
