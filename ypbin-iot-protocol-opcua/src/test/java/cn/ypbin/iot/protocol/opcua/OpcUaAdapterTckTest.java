@@ -45,7 +45,6 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -223,25 +222,49 @@ class OpcUaAdapterTckTest extends AbstractProtocolAdapterTckTest {
     }
 
     @Test
-    @DisplayName("OPC-06b 服务端改值必须推送到订阅者（harness 尚不具备该能力，显式跳过）")
+    @DisplayName("OPC-06b 服务端改值必须推送到订阅者，且取消后不得再投递")
     void nativeSubscriptionMustReceivePush() {
-        // 【显式缺口，不是静默跳过】订阅创建与取消已验证（OPC-06），但"服务端改值 → 推送"
-        // 这条链路需要 harness 通过 Milo 的 AttributeService 驱动值变更，当前 harness 用
-        // UaVariableNode.setValue 不足以触发 DataItem 上报。在产品代码确认收到推送之前，
-        // 这个用例必须保持"未验证"状态，而不是被删掉或改成永远通过。
-        Assumptions.abort("Milo 测试服务端的值变更驱动尚未打通（需经 AttributeService），"
-                + "原生订阅的推送路径待下轮验证");
         DeviceSession session = openSession();
         List<Object> received = new CopyOnWriteArrayList<>();
         try {
-            session.subscribe(
-                    new SubscribeRequest(List.of(PointAddress.of(server.nodeAddress("Temperature"))),
-                            Duration.ofMillis(100), Duration.ofMillis(100), null, Map.of()),
-                    value -> received.add(value.value()))
+            SubscriptionHandle handle = session.subscribe(
+                            new SubscribeRequest(
+                                    List.of(PointAddress.of(server.nodeAddress("Temperature"))),
+                                    Duration.ofMillis(100), Duration.ofMillis(100), null, Map.of()),
+                            value -> received.add(value.value()))
                     .toCompletableFuture().orTimeout(15, TimeUnit.SECONDS).join();
+
             server.updateValue("Temperature", 42.5D);
             awaitUntil(() -> !received.isEmpty(), Duration.ofSeconds(10));
-            assertThat(received).contains(42.5D);
+            assertThat(received).as("原生订阅必须收到服务端推送").contains(42.5D);
+            long beforeCancel = handle.deliveredCount();
+            assertThat(beforeCancel).isPositive();
+
+            session.unsubscribe(handle).toCompletableFuture().join();
+            assertThat(handle.active()).isFalse();
+            server.updateValue("Temperature", 43.5D);
+            sleep(500L);
+            assertThat(received).as("取消后不得继续投递").doesNotContain(43.5D);
+        } finally {
+            closeQuietly(session);
+        }
+    }
+
+    @Test
+    @DisplayName("OPC-06c 订阅不存在的节点必须失败，不得假成功")
+    void subscribeToMissingNodeMustFail() {
+        DeviceSession session = openSession();
+        try {
+            Throwable error = session.subscribe(
+                            new SubscribeRequest(
+                                    List.of(PointAddress.of("ns=2;s=DoesNotExist")),
+                                    Duration.ofMillis(100), Duration.ofMillis(100), null, Map.of()),
+                            value -> { })
+                    .toCompletableFuture().handle((handle, ex) -> ex)
+                    .orTimeout(20, TimeUnit.SECONDS).join();
+            assertThat(error)
+                    .as("服务端会回 Bad_NodeIdUnknown；不校验就会假成功，宿主永远收不到数据")
+                    .isNotNull();
         } finally {
             closeQuietly(session);
         }
@@ -278,6 +301,59 @@ class OpcUaAdapterTckTest extends AbstractProtocolAdapterTckTest {
             List<BrowseNode> nodes = browser.browse(new BrowseRequest("i=85", 3, 2))
                     .toCompletableFuture().orTimeout(20, TimeUnit.SECONDS).join();
             assertThat(nodes.size()).as("超过上限必须截断而不是继续拉取").isLessThanOrEqualTo(2);
+        } finally {
+            closeQuietly(session);
+        }
+    }
+
+    @Test
+    @DisplayName("OPC-08b 浏览必须真正按 maxDepth 下钻（原实现同步抽干队列，深度完全失效）")
+    void browseMustHonourDepth() {
+        DeviceSession session = openSession();
+        try {
+            BrowseExtension browser = session.unwrap(BrowseExtension.class).orElseThrow();
+            // 从 Root(i=84) 下钻 3 层才能到达 Objects 下的自定义变量；
+            // 若 maxDepth 失效（只浏览直接子节点），Temperature 将不可达
+            List<BrowseNode> deep = browser.browse(new BrowseRequest("i=84", 3, 500))
+                    .toCompletableFuture().orTimeout(30, TimeUnit.SECONDS).join();
+            assertThat(deep.stream().map(BrowseNode::displayName).toList())
+                    .as("maxDepth=3 必须能下钻到 Objects 的子节点")
+                    .contains("Temperature");
+
+            List<BrowseNode> shallow = browser.browse(new BrowseRequest("i=84", 1, 500))
+                    .toCompletableFuture().orTimeout(30, TimeUnit.SECONDS).join();
+            assertThat(shallow.stream().map(BrowseNode::displayName).toList())
+                    .as("maxDepth=1 只应返回直接子节点")
+                    .doesNotContain("Temperature");
+        } finally {
+            closeQuietly(session);
+        }
+    }
+
+    @Test
+    @DisplayName("OPC-14 同一批内写重复节点，逐项结果不得错位")
+    void duplicateNodeWriteMustNotMisalignResults() {
+        final double startValue = 11.5D;
+        DeviceSession session = openSession();
+        try {
+            // 第一项写非法类型（服务端必然拒绝），第二项写合法值。
+            // 原实现用 indexOf 定位结果，重复 NodeId 时两项都会命中首个下标 → 假成功
+            WriteResult result = session.write(WriteRequest.of(
+                            new PointWrite(PointAddress.of(server.nodeAddress("Temperature")), "not-a-number"),
+                            new PointWrite(PointAddress.of(server.nodeAddress("Temperature")), startValue)))
+                    .toCompletableFuture().orTimeout(15, TimeUnit.SECONDS).join();
+            assertThat(result.statuses()).hasSize(2);
+            assertThat(result.statuses().get(0).success())
+                    .as("非法类型写必须失败（原实现会误报成功）")
+                    .isFalse();
+            assertThat(result.statuses().get(1).success())
+                    .as("合法写必须成功（原实现会误报失败）")
+                    .isTrue();
+
+            ReadResult read = session.read(ReadRequest.of(
+                            PointAddress.of(server.nodeAddress("Temperature"))))
+                    .toCompletableFuture().join();
+            assertThat(read.values().get(0).value()).isEqualTo(startValue);
         } finally {
             closeQuietly(session);
         }

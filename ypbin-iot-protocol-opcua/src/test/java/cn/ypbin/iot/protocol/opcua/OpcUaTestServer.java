@@ -30,7 +30,9 @@ import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfig;
 import org.eclipse.milo.opcua.sdk.server.items.DataItem;
 import org.eclipse.milo.opcua.sdk.server.items.MonitoredItem;
+import org.eclipse.milo.opcua.sdk.server.nodes.AttributeObserver;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
+import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.Identifiers;
 import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
@@ -166,6 +168,9 @@ final class OpcUaTestServer implements AutoCloseable {
         /** 已创建的数据项（订阅场景下服务器按它推送变更）。 */
         private final Map<NodeId, DataItem> dataItems = new ConcurrentHashMap<>();
 
+        /** 节点属性观察者：把 Value 变更桥接到 DataItem。 */
+        private final Map<NodeId, AttributeObserver> observers = new ConcurrentHashMap<>();
+
         TestNamespace(OpcUaServer server) {
             super(server, "urn:ypbin:iot:test");
             addVariable("Temperature", 23.5D, true);
@@ -213,7 +218,26 @@ final class OpcUaTestServer implements AutoCloseable {
         // 必须实现；用一张 map 跟踪已创建的数据项，是 Milo 的标准模式。
         @Override
         public void onDataItemsCreated(List<DataItem> items) {
-            items.forEach(item -> dataItems.put(item.getReadValueId().getNodeId(), item));
+            // 关键接线：把节点的 Value 变更转发给 DataItem，否则服务器永远不会上报变更
+            // （只把 DataItem 存进 map 是"只写不读"，订阅推送整条链路静默失效）。
+            // 这也是上一轮把 nativeSubscriptionMustReceivePush 标为未验证的真因：
+            // 缺陷在 harness，不在产品代码。
+            items.forEach(item -> {
+                NodeId nodeId = item.getReadValueId().getNodeId();
+                dataItems.put(nodeId, item);
+                UaVariableNode node = nodes.get(nodeId.getIdentifier() instanceof String identifier
+                        ? identifier : "");
+                if (node == null) {
+                    return;
+                }
+                AttributeObserver observer = (observed, attributeId, value) -> {
+                    if (AttributeId.Value == attributeId && value instanceof DataValue dataValue) {
+                        item.setValue(dataValue);
+                    }
+                };
+                observers.put(nodeId, observer);
+                node.addAttributeObserver(observer);
+            });
         }
 
         @Override
@@ -223,7 +247,18 @@ final class OpcUaTestServer implements AutoCloseable {
 
         @Override
         public void onDataItemsDeleted(List<DataItem> items) {
-            items.forEach(item -> dataItems.remove(item.getReadValueId().getNodeId()));
+            items.forEach(item -> {
+                NodeId nodeId = item.getReadValueId().getNodeId();
+                dataItems.remove(nodeId);
+                AttributeObserver observer = observers.remove(nodeId);
+                if (observer != null) {
+                    UaVariableNode node = nodes.get(nodeId.getIdentifier() instanceof String identifier
+                            ? identifier : "");
+                    if (node != null) {
+                        node.removeAttributeObserver(observer);
+                    }
+                }
+            });
         }
 
         @Override

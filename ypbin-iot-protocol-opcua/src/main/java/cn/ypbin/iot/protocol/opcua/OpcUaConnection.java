@@ -23,6 +23,7 @@ import cn.ypbin.iot.core.model.Endpoint;
 import cn.ypbin.iot.core.model.SessionState;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -68,6 +69,15 @@ final class OpcUaConnection implements ProtocolConnection {
 
     OpcUaClient client() {
         return client;
+    }
+
+    /**
+     * 本链路的请求超时。
+     *
+     * @return 请求超时
+     */
+    Duration endpointRequestTimeout() {
+        return spec.requestTimeout();
     }
 
     void register(OpcUaSession session) {
@@ -146,6 +156,7 @@ final class OpcUaConnection implements ProtocolConnection {
         }
         state = SessionState.FAILED;
         sessions.values().forEach(OpcUaSession::onConnectionClosed);
+        sessions.clear();
         disconnectOnce(cause);
         closeReason.complete(new CloseReason(
                 cause == null ? CloseCause.REMOTE_CLOSED : CloseCause.TRANSPORT_ERROR, "", cause, Instant.now()));

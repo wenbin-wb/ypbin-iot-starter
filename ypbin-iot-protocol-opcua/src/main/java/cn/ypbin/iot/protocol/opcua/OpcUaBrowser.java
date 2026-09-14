@@ -23,17 +23,19 @@ import cn.ypbin.iot.core.model.PointAddress;
 import cn.ypbin.iot.core.protocol.BrowseExtension;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.util.Stages;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.NodeClass;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReferenceDescription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * OPC UA 地址空间浏览。
@@ -51,6 +53,8 @@ import org.eclipse.milo.opcua.stack.core.types.structured.ReferenceDescription;
 final class OpcUaBrowser implements BrowseExtension {
 
     private final OpcUaClient client;
+
+    private static final Logger log = LoggerFactory.getLogger(OpcUaBrowser.class);
 
     private final AdapterContext context;
 
@@ -85,55 +89,84 @@ final class OpcUaBrowser implements BrowseExtension {
         int maxDepth = request.maxDepth();
         int maxNodes = request.maxNodes();
         List<BrowseNode> collected = new ArrayList<>();
-        Deque<Level> frontier = new ArrayDeque<>();
-        frontier.add(new Level(root, 0));
-        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
-        while (!frontier.isEmpty()) {
-            Level level = frontier.poll();
-            chain = chain.thenCompose(ignored -> client.getAddressSpace()
-                    .browseAsync(level.nodeId())
-                    .orTimeout(Math.max(1L, context.settings().requestTimeout().toMillis()),
-                            java.util.concurrent.TimeUnit.MILLISECONDS)
-                    .handle((references, error) -> {
-                        if (error != null) {
-                            // 单个节点浏览失败不应中断整次浏览：记录后继续其余分支
-                            context.metrics().recordError(OpcUaAdapter.MSG_BROWSE_FAILED);
-                            return null;
-                        }
-                        if (references == null) {
-                            return null;
-                        }
-                        for (ReferenceDescription reference : references) {
-                            if (collected.size() >= maxNodes) {
-                                return null;
-                            }
-                            // ExpandedNodeId 需要命名空间表才能解析为本地 NodeId
-                            NodeId child = reference.getNodeId() == null ? null
-                                    : reference.getNodeId().toNodeId(client.getNamespaceTable()).orElse(null);
-                            if (child == null) {
-                                continue;
-                            }
-                            boolean browseable = reference.getNodeClass() != null;
-                            collected.add(new BrowseNode(PointAddress.of(OpcUaNodeIdCodec.format(child)),
-                                    reference.getBrowseName() == null ? null
-                                            : reference.getBrowseName().getName(),
-                                    reference.getNodeClass() == null ? "" : reference.getNodeClass().name(),
-                                    browseable,
-                                    attributes(reference)));
-                            if (browseable && level.depth() + 1 < maxDepth) {
-                                frontier.add(new Level(child, level.depth() + 1));
-                            }
-                        }
-                        return null;
-                    }));
+        return Stages.normalize(browseLevel(root, 0, maxDepth, maxNodes, collected)
+                .thenApply(ignored -> {
+                    if (collected.size() >= maxNodes) {
+                        context.log(LogLevel.WARN, OpcUaAdapter.MSG_BROWSE_TRUNCATED,
+                                String.valueOf(maxNodes));
+                    }
+                    return List.copyOf(collected);
+                }));
+    }
+
+    /**
+     * 递归浏览一个层级。
+     *
+     * <p><b>为什么必须是递归组合而不是同步 while 循环</b>：子节点是在<b>异步回调里</b>入队的，
+     * 同步循环会在任何回调执行前就把队列抽干 —— 结果是 {@code maxDepth} 完全失效、
+     * 永远只浏览根的直接子节点（该缺陷已被实证）。</p>
+     *
+     * <p>同层子节点按<b>顺序</b>递归而非并发：真实服务器对并发 Browse 有限流，
+     * 一次拉爆会让整个浏览失败或拖慢服务器。</p>
+     */
+    private CompletableFuture<Void> browseLevel(NodeId nodeId, int depth, int maxDepth, int maxNodes,
+            List<BrowseNode> collected) {
+        if (depth >= maxDepth || collected.size() >= maxNodes) {
+            return CompletableFuture.completedFuture(null);
         }
-        return Stages.normalize(chain.thenApply(ignored -> {
-            if (collected.size() >= maxNodes) {
-                context.log(LogLevel.WARN, OpcUaAdapter.MSG_BROWSE_TRUNCATED,
-                        String.valueOf(maxNodes));
-            }
-            return List.copyOf(collected);
-        }));
+        return client.getAddressSpace().browseAsync(nodeId)
+                .orTimeout(Math.max(1L, context.settings().requestTimeout().toMillis()),
+                        TimeUnit.MILLISECONDS)
+                .handle((references, error) -> {
+                    if (error != null) {
+                        // 单个节点浏览失败不中断整次浏览：记指标后继续其余分支
+                        context.metrics().recordError(OpcUaAdapter.MSG_BROWSE_FAILED);
+                        log.debug("[ypbin-iot] opcua browse failed for node {}", nodeId, error);
+                        return List.<ReferenceDescription>of();
+                    }
+                    return references == null ? List.<ReferenceDescription>of() : references;
+                })
+                .thenCompose(references -> {
+                    List<NodeId> children = new ArrayList<>();
+                    for (ReferenceDescription reference : references) {
+                        if (collected.size() >= maxNodes) {
+                            break;
+                        }
+                        NodeId child = reference.getNodeId() == null ? null
+                                : reference.getNodeId().toNodeId(client.getNamespaceTable()).orElse(null);
+                        if (child == null) {
+                            // 远端命名空间未注册时无法解析为本地 NodeId：不能静默丢，要留痕
+                            context.metrics().recordError(OpcUaAdapter.MSG_BROWSE_UNRESOLVED);
+                            continue;
+                        }
+                        boolean browseable = isBrowseable(reference.getNodeClass());
+                        collected.add(new BrowseNode(PointAddress.of(OpcUaNodeIdCodec.format(child)),
+                                reference.getBrowseName() == null ? null
+                                        : reference.getBrowseName().getName(),
+                                reference.getNodeClass() == null ? "" : reference.getNodeClass().name(),
+                                browseable,
+                                attributes(reference)));
+                        if (browseable && depth + 1 < maxDepth) {
+                            children.add(child);
+                        }
+                    }
+                    CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
+                    for (NodeId child : children) {
+                        chain = chain.thenCompose(ignored ->
+                                browseLevel(child, depth + 1, maxDepth, maxNodes, collected));
+                    }
+                    return chain;
+                });
+    }
+
+    /**
+     * 该节点类型是否可继续下钻。
+     *
+     * <p>不能简单用 {@code getNodeClass() != null}（该字段必填，恒为真）——
+     * 那会让每个变量都被当成可浏览节点，一旦递归就会把变量的属性也拉进来。</p>
+     */
+    private static boolean isBrowseable(NodeClass nodeClass) {
+        return nodeClass == NodeClass.Object || nodeClass == NodeClass.View;
     }
 
     private static Map<String, String> attributes(ReferenceDescription reference) {
@@ -147,14 +180,4 @@ final class OpcUaBrowser implements BrowseExtension {
         return Map.copyOf(attributes);
     }
 
-    /**
-     * 浏览层级（广度优先遍历用）。
-     *
-     * @param nodeId 节点
-     * @param depth  深度
-     * @author wenbin
-     * @since 2026-09-14
-     */
-    private record Level(NodeId nodeId, int depth) {
-    }
 }

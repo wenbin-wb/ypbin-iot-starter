@@ -39,6 +39,7 @@ import cn.ypbin.iot.core.util.Stages;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,9 +47,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
+import org.eclipse.milo.opcua.sdk.client.subscriptions.MonitoredItemServiceOperationResult;
 import org.eclipse.milo.opcua.sdk.client.subscriptions.OpcUaMonitoredItem;
 import org.eclipse.milo.opcua.sdk.client.subscriptions.OpcUaSubscription;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
@@ -112,7 +115,11 @@ final class OpcUaSession implements DeviceSession {
         this.context = context;
         this.maxNodesPerRead = maxNodesPerRead;
         this.publishingInterval = publishingInterval;
-        Duration timeout = context.settings().requestTimeout();
+        // 优先用链路级 requestTimeout：宿主按链路配的超时必须生效
+        Duration timeout = connection.endpointRequestTimeout();
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            timeout = context.settings().requestTimeout();
+        }
         this.requestTimeoutMillis = timeout == null || timeout.isZero() || timeout.isNegative()
                 ? OpcUaAdapter.DEFAULT_REQUEST_TIMEOUT.toMillis() : timeout.toMillis();
         this.boundAt = context.clock().instant();
@@ -193,9 +200,8 @@ final class OpcUaSession implements DeviceSession {
                     values.add(preFailure);
                     continue;
                 }
-                NodeId nodeId = OpcUaNodeIdCodec.parse(address.raw());
-                DataValue dataValue = collected.get(nodeId);
-                values.add(toPointValue(address, nodeId, dataValue, finished));
+                DataValue dataValue = collected.get(OpcUaNodeIdCodec.parse(address.raw()));
+                values.add(toPointValue(address, dataValue, finished));
             }
             // SPI §4.2：整条链路不可用且全部点位失败时必须异常完成，
             // 否则宿主无法区分「个别点位坏」与「链路已死」
@@ -209,16 +215,17 @@ final class OpcUaSession implements DeviceSession {
         }));
     }
 
-    private PointValue toPointValue(PointAddress address, NodeId nodeId, DataValue dataValue, Instant now) {
+    private PointValue toPointValue(PointAddress address, DataValue dataValue, Instant now) {
         if (dataValue == null) {
             return PointValue.bad(address, Quality.BAD, OpcUaAdapter.MSG_NO_RESULT, now);
         }
         StatusCode statusCode = dataValue.getStatusCode();
         if (statusCode == null || !statusCode.isGood()) {
-            context.metrics().recordError(statusCode == null
-                    ? OpcUaAdapter.MSG_NO_RESULT : statusCode.toString());
-            return PointValue.bad(address, Quality.BAD,
-                    statusCode == null ? OpcUaAdapter.MSG_NO_RESULT : statusCode.toString(), now);
+            // 原始 StatusCode 只进日志与指标维度，不进 qualityReason：
+            // qualityReason 是 i18n 消息键（I2/C6），塞原始字符串会让宿主无法按码分类
+            context.metrics().recordError(OpcUaAdapter.MSG_STATUS_BAD);
+            log.debug("[ypbin-iot] opcua node {} returned status {}", address.raw(), statusCode);
+            return PointValue.bad(address, Quality.BAD, OpcUaAdapter.MSG_STATUS_BAD, now);
         }
         Instant sourceTime = dataValue.getSourceTime() == null ? now : dataValue.getSourceTime().getJavaInstant();
         return PointValue.good(address, dataValue.getValue() == null ? null : dataValue.getValue().getValue(),
@@ -249,8 +256,12 @@ final class OpcUaSession implements DeviceSession {
             int to = Math.min(offset + maxNodesPerRead, nodeIds.size());
             List<NodeId> chunkNodes = new ArrayList<>();
             List<DataValue> chunkValues = new ArrayList<>();
+            // 记录每个请求项在本次 chunk 内的**位置**：用 indexOf 定位在重复 NodeId 时
+            // 会全部命中首个下标 → 写失败被报成功、写成功被报失败（已有实证）
+            Map<Integer, Integer> positionOf = new LinkedHashMap<>();
             for (int index = from; index < to; index++) {
                 if (nodeIds.get(index) != null) {
+                    positionOf.put(index, chunkNodes.size());
                     chunkNodes.add(nodeIds.get(index));
                     chunkValues.add(dataValues.get(index));
                 }
@@ -267,8 +278,8 @@ final class OpcUaSession implements DeviceSession {
                             if (nodeIds.get(index) == null) {
                                 continue;
                             }
-                            int position = chunkNodes.indexOf(nodeIds.get(index));
-                            if (error != null || results == null || position < 0
+                            Integer position = positionOf.get(index);
+                            if (error != null || results == null || position == null
                                     || position >= results.size()) {
                                 statuses.set(index, PointWriteStatus.fail(write.address(),
                                         OpcUaAdapter.MSG_WRITE_FAILED));
@@ -278,7 +289,7 @@ final class OpcUaSession implements DeviceSession {
                             statuses.set(index, statusCode != null && statusCode.isGood()
                                     ? PointWriteStatus.ok(write.address())
                                     : PointWriteStatus.fail(write.address(), statusCode == null
-                                            ? OpcUaAdapter.MSG_WRITE_FAILED : statusCode.toString()));
+                                            ? OpcUaAdapter.MSG_WRITE_FAILED : OpcUaAdapter.MSG_STATUS_BAD));
                         }
                         return null;
                     }));
@@ -328,7 +339,19 @@ final class OpcUaSession implements DeviceSession {
                 items.add(item);
             }
             uaSubscription.addMonitoredItems(items);
-            uaSubscription.createMonitoredItems();
+            List<MonitoredItemServiceOperationResult> createResults =
+                    uaSubscription.createMonitoredItems();
+            long failed = createResults.stream().filter(item -> !item.isGood()).count();
+            if (failed > 0) {
+                // 订阅不存在的节点时服务端会回 Bad_NodeIdUnknown：不校验就会"假成功"，
+                // 宿主以为订上了却永远收不到数据（禁静默假成功）
+                context.log(LogLevel.WARN, OpcUaAdapter.MSG_SUBSCRIBE_PARTIAL_FAILED,
+                        device.deviceId(), String.valueOf(failed), String.valueOf(items.size()));
+            }
+            if (failed == createResults.size()) {
+                uaSubscription.deleteAsync().toCompletableFuture().join();
+                throw new ProtocolException(OpcUaAdapter.MSG_SUBSCRIBE_FAILED, device.deviceId());
+            }
             subscription.attach(uaSubscription);
             subscriptions.put(subscription.subscriptionId(), subscription);
             context.log(LogLevel.DEBUG, OpcUaAdapter.MSG_SUBSCRIBED, device.deviceId(),
@@ -351,7 +374,7 @@ final class OpcUaSession implements DeviceSession {
         if (!subscription.active.get()) {
             return;
         }
-        PointValue point = toPointValue(address, null, dataValue, context.clock().instant());
+        PointValue point = toPointValue(address, dataValue, context.clock().instant());
         subscription.delivered.incrementAndGet();
         context.metrics().recordSubscriptionBatch(1);
         if (subscription.listener != null) {
@@ -444,7 +467,7 @@ final class OpcUaSession implements DeviceSession {
     }
 
     private static boolean isTimeout(Throwable error) {
-        return Stages.unwrap(error) instanceof java.util.concurrent.TimeoutException;
+        return Stages.unwrap(error) instanceof TimeoutException;
     }
 
     /**

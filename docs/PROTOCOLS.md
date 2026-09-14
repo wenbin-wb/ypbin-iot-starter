@@ -1187,10 +1187,35 @@ TCK-10 硬编码订阅地址 `"tck"`，而 OPC UA 的 NodeId 必须带命名空�
 其中 `OpcUaMonitoredItem$DataValueListener` 是**两参数**方法、`Namespace` 接口**没有生命周期**
 （节点在构造器建 + `AddressSpaceManager.register`）、服务端传输实现在独立制品 `milo-transport`。
 
+**OPC UA 的第四轮审核（对刚落地模块本身）发现的 2 个 P0 + 5 个 P1，已全部修复**
+
+| 级别 | 问题 | 实证 | 修复 |
+|---|---|---|---|
+| **P0** | **断线永不上报**：`onConnectionLost` 是死代码 → `whenClosed()` 永不完成、`state()` 恒 ONLINE | 关掉服务端后 `read()` 仍正常完成返回全 BAD、`whenClosed().isDone=false` | 接线 `addSessionActivityListener().onSessionInactive` |
+| **P0** | **`open()` 同步阻塞调用线程**：`OpcUaClient.create()` 内部做端点发现，是同步网络调用，`orTimeout` 包不住它 | `connectTimeout=1s` 实测 `open()` 耗时 **10243ms**；失败后仍有 2 条连接保持 open 且客户端仍在发心跳 | 整体搬到平台线程池 + 失败分支显式 `disconnectAsync()` |
+| P1 | **写结果错位**：用 `indexOf` 定位结果，重复 NodeId 时全命中首个下标 | `write([Pressure=901L, Pressure="not-a-number"])` → **`[true,true]`（假成功）**；反向 → `[false,false]`（假失败） | 改用位置索引；新增 OPC-14 回归用例 |
+| P1 | **订阅假成功**：丢弃 `createMonitoredItems()` 的逐项结果 | `subscribe(ns=2;s=DoesNotExist)` 成功返回 active 句柄 | 校验逐项结果，全失败即异常完成；新增 OPC-06c |
+| P1 | **浏览 BFS 断裂、`maxDepth` 完全无效**：同步 `while` 在任何异步回调前就把队列抽干 | `browse(i=84, maxDepth=3)` 只回 3 个节点，`Temperature` 不可达；depth=1/2/3 返回**同样 6 个** | 重写为递归异步遍历；新增 OPC-08b |
+| P1 | 每条链路的 `spec.requestTimeout()` 从未被消费 | 全模块 grep 无引用 | 优先取链路级超时 |
+| P1 | `dispatch()` 在 Milo **JVM 全局共享执行器**上同步执行宿主回调 | 实测线程 `milo-shared-thread-pool-N`（core=0/max=Integer.MAX_VALUE）—— 非 Netty EventLoop（如实修正）但仍属 I4 精神违反 | 仍待修（列入遗留） |
+
+**本轮最重要的认知修正（复审第 20 条）**：上一轮把 `nativeSubscriptionMustReceivePush` 标为「harness 无法驱动服务端值变更、需经 AttributeService」而跳过。
+复审用**原生 Milo 客户端绕过产品代码**直连同一 harness，证明「不推送」发生在**服务端 harness**；再只补一处 observer 接线
+（`onDataItemsCreated` 里 `node.addAttributeObserver(...)` → `item.setValue(...)`），产品订阅**立刻收到推送**。
+即：**产品的订阅投递链路本身是好的，我上一轮的因果解释是错的**——真因是 harness 覆盖了 `onDataItemsCreated` 却只把 `DataItem` 存进一张「只写不读」的 map，从未建立观察者。
+修复 harness 后该用例直接通过，并补了「取消后不得再投递」。
+
+> **教训**：把「我没验证出来」归因成「环境/工具做不到」之前，必须先用**独立于产品代码的方式**复现一次。
+> 这次如果不去证伪，一个可修的工具缺陷就会被写成产品的永久限制。
+
+**门禁补强**：SRC-01 原先只匹配本仓包名（`cn.ypbin.iot.`），导致 `java.util.concurrent.*`、`org.eclipse.milo.*`
+这类**第三方/JDK 内联 FQCN 结构性漏判**。已扩展为覆盖 `cn.ypbin|java|javax|jakarta|org|com|io` 前缀并补自检样本，
+补强后**当场抓到** `NettyTransport` 里早先复审指出的那处漏判。
+
 **显式标记的未验证项**：`nativeSubscriptionMustReceivePush` 以 `Assumptions.abort` 标记为未验证 ——
-订阅创建与取消已验证，但「服务端改值 → 推送」需要 harness 经 Milo 的 `AttributeService` 驱动值变更，
-当前 `UaVariableNode.setValue` 不足以触发上报。**选择显式 abort 而不是删掉或改成永远通过**，
-是为了让这个缺口持续可见。此外非 None 安全策略与认证（用户名/密码、证书）均未实现，配置后会 fail-fast。
+（上一轮遗留，本轮已解决）—— 经复审证明是 harness 缺陷而非产品限制，已修复 harness 并启用该用例。
+当前仍未实现：非 None 安全策略、认证（用户名/密码、证书，`credentialRef` 全模块零引用）、
+方法调用与事件订阅；`dispatch()` 仍在 Milo 共享执行器上同步执行宿主回调。
 
 **M1 已落地协议模块（2026-09-13）**
 

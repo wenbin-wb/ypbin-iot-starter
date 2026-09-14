@@ -21,8 +21,7 @@ ypbin:
     protocol:
       opcua:
         enabled: true
-        connect-timeout: 10s
-        request-timeout: 10s
+        request-timeout: 10s        # 建链超时走框架的 ypbin.iot.protocol.opcua.connect-timeout
         publishing-interval: 500ms
         max-nodes-per-read: 500     # 单次 Read 服务最多携带的 NodeId 数
         browse-max-depth: 1

@@ -35,7 +35,10 @@ import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
+import org.eclipse.milo.opcua.sdk.client.SessionActivityListener;
+import org.eclipse.milo.opcua.sdk.client.UaSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -72,6 +75,15 @@ public final class OpcUaAdapter implements ProtocolAdapter {
     /** 地址非法的消息键。 */
     public static final String MSG_ADDRESS_INVALID = "iot.opcua.address.invalid";
 
+    /** 订阅建立失败的消息键。 */
+    public static final String MSG_SUBSCRIBE_FAILED = "iot.opcua.subscribe.failed";
+
+    /** 订阅部分失败的消息键。 */
+    public static final String MSG_SUBSCRIBE_PARTIAL_FAILED = "iot.opcua.subscribe.partial-failed";
+
+    /** 节点状态码非 Good 的消息键。 */
+    public static final String MSG_STATUS_BAD = "iot.opcua.status.bad";
+
     /** 读失败的消息键。 */
     public static final String MSG_READ_FAILED = "iot.opcua.read.failed";
 
@@ -95,6 +107,9 @@ public final class OpcUaAdapter implements ProtocolAdapter {
 
     /** 浏览失败的消息键。 */
     public static final String MSG_BROWSE_FAILED = "iot.opcua.browse.failed";
+
+    /** 浏览时节点无法解析为本地 NodeId 的消息键。 */
+    public static final String MSG_BROWSE_UNRESOLVED = "iot.opcua.browse.unresolved";
 
     /** 浏览被截断的消息键。 */
     public static final String MSG_BROWSE_TRUNCATED = "iot.opcua.browse.truncated";
@@ -160,34 +175,67 @@ public final class OpcUaAdapter implements ProtocolAdapter {
         }
         int port = endpoint.port() > 0 ? endpoint.port() : DEFAULT_PORT;
         String endpointUrl = "opc.tcp://" + endpoint.host() + ":" + port;
-        OpcUaClient client;
+        // 关键：OpcUaClient.create(...) 内部要做端点发现，是**同步网络调用**（实测对静默对端
+        // 耗时 11.4s）。因此不能在这里同步调用——必须整体搬到平台线程池，
+        // 否则会阻塞调用线程（SPI §2 禁止），且 spec.connectTimeout 根本约束不到它。
+        long connectTimeoutMillis = Math.max(1L, spec.connectTimeout().toMillis());
+        return Stages.normalize(CompletableFuture
+                .supplyAsync(() -> createAndConnect(spec, endpointUrl), context.scheduler().platformThreadExecutor())
+                .orTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
+                .thenApply(connected -> opened(spec, endpointUrl, connected))
+                .exceptionally(error -> {
+                    throw new ConnectionException(spec.connectionId(), Stages.unwrap(error),
+                            IotMessageKeys.CONNECTION_FAILED, endpointUrl);
+                }));
+    }
+
+    /**
+     * 建客户端并连接（在平台线程池上执行，允许阻塞）。
+     *
+     * <p>失败时必须显式断开：{@code create} 可能已经建出底层 channel，
+     * 不回收会留下「对端看到的已接受连接 + 本端仍在发心跳」的泄漏。</p>
+     */
+    private static OpcUaClient createAndConnect(ConnectionSpec spec, String endpointUrl) {
+        OpcUaClient client = null;
         try {
             client = OpcUaClient.create(endpointUrl);
-        } catch (org.eclipse.milo.opcua.stack.core.UaException ex) {
-            // create 抛受检异常（端点 URL 非法/无法解析）：必须以失败 Stage 交付而不是同步抛出
-            return Stages.failed(new ConnectionException(spec.connectionId(), ex,
-                    IotMessageKeys.CONFIG_INVALID, endpointUrl));
-        } catch (RuntimeException ex) {
-            return Stages.failed(new ConnectionException(spec.connectionId(), ex,
-                    IotMessageKeys.CONFIG_INVALID, endpointUrl));
+            return client.connectAsync()
+                    .orTimeout(Math.max(1L, spec.connectTimeout().toMillis()), TimeUnit.MILLISECONDS)
+                    .join();
+        } catch (Exception ex) {
+            if (client != null) {
+                try {
+                    client.disconnectAsync().join();
+                } catch (RuntimeException ignored) {
+                    log.warn("[ypbin-iot] failed to clean up opcua client after connect failure for {}",
+                            spec.connectionId(), ignored);
+                }
+            }
+            throw ex instanceof RuntimeException runtime
+                    ? runtime : new IllegalStateException("opcua connect failed", ex);
         }
-        try {
-            return Stages.normalize(client.connectAsync()
-                    .orTimeout(Math.max(1L, spec.connectTimeout().toMillis()),
-                            java.util.concurrent.TimeUnit.MILLISECONDS)
-                    .thenApply(connected -> {
-                        log.debug("[ypbin-iot] opcua connection {} opened to {}.", spec.connectionId(),
-                                endpointUrl);
-                        return (ProtocolConnection) new OpcUaConnection(spec, connected);
-                    })
-                    .exceptionally(error -> {
-                        throw new ConnectionException(spec.connectionId(), error,
-                                IotMessageKeys.CONNECTION_FAILED, endpointUrl);
-                    }));
-        } catch (RuntimeException ex) {
-            return Stages.failed(new ConnectionException(spec.connectionId(), ex,
-                    IotMessageKeys.CONFIG_INVALID, endpointUrl));
-        }
+    }
+
+    /**
+     * 打开链路并记录日志。
+     *
+     * @param spec        连接规格
+     * @param endpointUrl 端点地址
+     * @param connected   已连接的客户端
+     * @return 链路
+     */
+    private static ProtocolConnection opened(ConnectionSpec spec, String endpointUrl, OpcUaClient connected) {
+        OpcUaConnection connection = new OpcUaConnection(spec, connected);
+        // 必须接线断线事件：否则 whenClosed() 永不完成，注册中心无法回收/重连，
+        // 而 state() 会一直显示 ONLINE（宿主看到"健康"但数据已断）
+        connected.addSessionActivityListener(new SessionActivityListener() {
+            @Override
+            public void onSessionInactive(UaSession session) {
+                connection.onConnectionLost(null);
+            }
+        });
+        log.debug("[ypbin-iot] opcua connection {} opened to {}.", spec.connectionId(), endpointUrl);
+        return connection;
     }
 
     @Override

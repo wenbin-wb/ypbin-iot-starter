@@ -59,9 +59,18 @@ class SourceConventionTest {
     /** 本仓包名前缀。 */
     private static final String OWN_PACKAGE = "cn.ypbin.iot.";
 
-    /** 内联全限定类名：正文中出现本仓包名，且不在 import/package 行、不在注释里。 */
-    private static final Pattern INLINE_FQCN =
-            Pattern.compile("(?<![\\w.])" + Pattern.quote(OWN_PACKAGE) + "[A-Za-z][\\w.]*");
+    /**
+     * 内联全限定类名：正文中出现任意包名前缀（本仓 / JDK / 第三方），
+     * 且不在 import/package 行、不在注释里。
+     *
+     * <p><b>为什么必须覆盖全部包名</b>：早先只匹配 {@code cn.ypbin.iot.}，导致
+     * {@code java.util.concurrent.TimeUnit}、{@code org.eclipse.milo...UaException} 这类
+     * 第三方/JDK 内联 FQCN <b>结构性漏判</b>——同一条 R10 规则，第一方被拦、第三方放行，
+     * 而后者在实际代码里同样常见（尤其是处理受检异常与并发类型时）。</p>
+     */
+    private static final Pattern INLINE_FQCN = Pattern.compile(
+            "(?<![\\w.$])(?:cn\\.ypbin|java|javax|jakarta|org|com|io)\\.[a-z][\\w]*"
+                    + "(?:\\.[a-zA-Z][\\w]*)+");
 
     /** {@code ordinal()} 调用。 */
     private static final Pattern ORDINAL_CALL = Pattern.compile("\\.ordinal\\s*\\(\\s*\\)");
@@ -187,6 +196,19 @@ class SourceConventionTest {
     @DisplayName("SELF-01 内联 FQCN 规则必须能命中违规样本")
     void inlineFqcnRuleMustDetectViolation() {
         String violation = "    return cn.ypbin.iot.core.model.PointValue.good(address, 1, now);";
+        assertThat(INLINE_FQCN.matcher("        long t = java.util.concurrent.TimeUnit.SECONDS.toMillis(1);").find())
+                .as("JDK 内联 FQCN 同样是 R10 违规，早先只匹配本仓包名导致漏判")
+                .isTrue();
+        assertThat(INLINE_FQCN.matcher("        throw new org.eclipse.milo.opcua.stack.core.UaException();").find())
+                .as("第三方内联 FQCN 同样必须被拦")
+                .isTrue();
+        assertThat(INLINE_FQCN.matcher("        Duration d = Duration.ofSeconds(1);").find())
+                .as("简单类名不得误报")
+                .isFalse();
+        assertThat(INLINE_FQCN.matcher(stripJavadocLinks(
+                        " * @see {@link java.util.concurrent.TimeUnit}")).find())
+                .as("Javadoc 的 {@link 全限定名} 仍须豁免")
+                .isFalse();
         assertThat(INLINE_FQCN.matcher(stripJavadocLinks(violation)).find())
                 .as("规则写错就永远不报错，等于装饰")
                 .isTrue();

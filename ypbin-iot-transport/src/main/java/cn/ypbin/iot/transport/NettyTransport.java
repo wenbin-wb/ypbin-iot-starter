@@ -24,6 +24,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -221,7 +222,7 @@ public final class NettyTransport implements AutoCloseable {
      * @author wenbin
      * @since 2026-09-13
      */
-    private static final class IdleCloseHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
+    private static final class IdleCloseHandler extends ChannelInboundHandlerAdapter {
 
         private final String connectionId;
 
