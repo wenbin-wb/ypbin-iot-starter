@@ -1557,6 +1557,32 @@ quarantine, new TestCertificateGroup(...)))` 提供 —— **stack-core 没有�
 实现**，测试侧按 Milo 官方源码（`DefaultCertificateManager` 按 `getCertificateGroupId()` 注册、
 按证书类型 NodeId 取密钥）写了最小实现，类型 ID 用 `NodeIds.RsaSha256ApplicationCertificateType`。
 
+**工程化对齐（2026-09-14）——从「不是一套标准」到对齐**
+
+审计发现本仓与母仓的最大差距在工程化/发布标准整体缺失，本轮补齐：
+
+| 项 | 内容 |
+|---|---|
+| 发布/协作基础设施 | `LICENSE`、`CHANGELOG.md`、`CONTRACT.md`（稳定面/不承诺面/**有测试支撑的行为承诺**/明确不做的）、`CONTRIBUTING.md`、`RELEASING.md`、`ROADMAP.md` |
+| CI | `ci.yml`（全量 clean test + NullAway + 依赖收敛 + 元数据漂移 + SBOM）、`codeql.yml`、`release.yml`（默认 dry-run） |
+| 发布工程 | 根 pom 的 `release` profile（GPG + central-publishing）；`dev-only` profile 承载非发布模块；`ModulePublishingTest` 守边界。**已实测**：`-Prelease` 反应堆为 12 个模块、不含架构测试 |
+| NullAway | 8 个模块全部纳入、**0 违规**；`tools/check-nullaway.sh` 自带「门禁是否真的执行过」自检 |
+| 工具链 | `check-nullaway.sh`、`export-config-metadata.mjs`（聚合 + 漂移门禁）、`preflight.sh` |
+| 遗留项 | OPC UA **用户名令牌端到端已打通**（`SEC-E2E-02` + 反向用例 `SEC-E2E-03`）；`HOSTNAME` 校验改为**可选开关**（默认关） |
+
+**审计顺带发现并修掉的两个门禁缺陷**（都不是「代码写错」，而是**门禁覆盖范围与声称不一致**）：
+
+1. **4 个协议模块没有配置处理器**：它们都用了 `@ConfigurationProperties` 却没有
+   `spring-boot-configuration-processor` → 宿主的 IDE 对 `ypbin.iot.protocol.*` 的所有配置项
+   **没有任何补全**（不报错、不影响运行，只是静默失去提示）。元数据 1 模块/19 项 → **5 模块/51 项**。
+2. **ArchUnit 规则静默跳过 3 个协议模块**：arch-tests 只依赖 `protocol-tcp`，
+   而规则用 `importPackages("cn.ypbin.iot")` —— modbus/mqtt/opcua 的字节码不在 classpath 上，
+   于是「协议实现包不得使用 Spring 类型」这类规则**看起来通过、实则从未检查过它们**。
+   已补依赖 + 加 `CFGMETA-05` 自检，把「规则覆盖了哪些模块」变成可断言的事实。
+
+> 这是同一族问题的又一次出现：**门禁是绿的 ≠ 它检查了你以为的范围**。
+> 与「放进 `pluginManagement` 导致门禁永不生效」「`-am` 失败后跳过后续模块导致假零」同源。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |
