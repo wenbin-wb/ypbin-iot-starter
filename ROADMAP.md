@@ -24,7 +24,11 @@
 - ✅ `LICENSE` / `CHANGELOG` / `CONTRACT` / `CONTRIBUTING` / `RELEASING` / `ROADMAP`
 - ⬜ CI（`ci.yml` / `codeql.yml` / `release.yml`，对齐母仓）
 - ⬜ NullAway（`-Pnullaway` + `@NullMarked`）覆盖全部模块
-- ⬜ ArchUnit 补齐母仓有而本仓缺的门禁（注册发现、编码规则）
+- ⬜ ArchUnit 补齐母仓有而本仓缺的门禁
+  - ✅ 模块发布边界（`ModulePublishingTest`，已反向验证）
+  - ✅ 配置元数据（`ConfigMetadataTest`，已反向验证）
+  - ✅ 注册发现：**已有**（`IotAutoConfigurationTest.CFG-08` 已做 SpringFactoriesLoader 发现，不重复建设）
+  - ✅ 编码规则（printStackTrace/System.out/字段注入/Collections）：**已有**（`ARCH-05`）
 - ⬜ `tools/` 工具链（配置元数据导出与漂移门禁、`preflight.sh`）
 - ⬜ 发布前置：GPG + `central-publishing-maven-plugin` 接入
 
