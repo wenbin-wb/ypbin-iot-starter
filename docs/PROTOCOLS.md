@@ -1162,6 +1162,37 @@ M0 不是「搭个空壳」，而是**把"能跑"这件事变成可验证事实*
 | 调度器 | 用 `ScheduledExecutorService`，未实现 DESIGN §4.4 的分层时间轮 | 通过 1 万连接门禁、准备冲击 10 万连接时（M0 门槛下堆开销与精度完全够用） |
 | Netty 传输 | 用 `NioEventLoopGroup`，未切 `EpollEventLoopGroup` | 同上（届时可拿到 `SO_REUSEPORT` 与更低系统调用开销） |
 
+**M1 已落地协议模块（2026-09-13）**
+
+| 模块 | 协议库 | 能力 | 测试 | 覆盖率 |
+|---|---|---|---|---|
+| `ypbin-iot-protocol-modbus` | digitalpetri modbus 2.1.6（EPL-2.0）| READ / WRITE / SUBSCRIBE_POLLING / MULTI_DEVICE_LINK | 46 用例 + 独立手写 MBAP 应答器 | 84.9% |
+| `ypbin-iot-protocol-mqtt` | HiveMQ client 1.4.0（Apache-2.0）| WRITE / SUBSCRIBE_NATIVE / MULTI_DEVICE_LINK | 41 用例 + 嵌入式 Moquette broker | 89.5% |
+
+**框架侧配套能力**：
+- `PollingSubscriptionManager`（`SUBSCRIBE_POLLING`）：上一轮未结束不叠加下一轮（慢设备天然自适应降频）；
+  单轮失败按退避重试而不让订阅死掉。S7/SNMP 可直接复用。
+- `ConnectionRegistry` 建链速率限制（令牌桶 + 抖动）：10 万连接启动风暴的硬闸门。
+
+**M1 过程中由测试抓出的真实缺陷（均已修）**：
+
+| 缺陷 | 发现方式 |
+|---|---|
+| `open()` 对非法串口端点**同步抛异常**而非返回失败 Stage（违反 SPI 契约）| Modbus 边界测试 |
+| `ModbusSession.ping()` 查协议库 `isConnected()`，而断开是异步的 → 已关闭会话仍报存活 | Modbus 边界测试 |
+| 测试模拟器 MBAP 头按 6 字节读（实际 7 字节含 unitId）、响应漏写 unitId | 端到端测试 |
+| MQTT **忽略了 `ConnectionSpec.connectTimeout`**，连不可达 broker 会一直重试 | MQTT 边界测试 |
+| MQTT 客户端标识不唯一 → broker 互踢 | MQTT 专项测试 |
+| 协议码在两处维护（`modbus-tcp` vs `modbus`）漂移 | 地址解析测试 |
+
+**M1 的取舍与实测结论**：
+- **MQTT 基线定在 3.1.1 而非 5.0**：测试过程中发现 Moquette 只支持 3.1.1，
+  进而复核了工业现场的实际分布——绝大多数 broker 与设备只支持 3.1.1，5.0 专属能力在现场几乎用不上。
+  因此定为 3.1.1 基线（兼容性优先），并**移除了 MQTT 5 专属配置项**（留着就是「配置了不生效」）。
+- **Modbus 地址不做自动猜测**：各厂商文档对同一寄存器的写法从 `40001` 到 `0` 到 `holding:1` 不等，
+  猜错的表现是「读到了值但值不对（整体偏移一位）」，比直接报错难排查得多。
+- **MQTT 载荷不做 JSON 解析**：载荷是不透明字节，协议层不做结构假设。
+
 **M0 已知未完成项（复审发现，不影响骨架可用性，列入 M1 前置）**
 
 | 级别 | 项 | 说明 |

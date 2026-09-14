@@ -40,6 +40,19 @@
                 <version>${modbus.version}</version>
             </dependency>
 
+            <!-- 协议库：MQTT（Apache-2.0 客户端 + 仅测试用的嵌入式 broker） -->
+            <dependency>
+                <groupId>com.hivemq</groupId>
+                <artifactId>hivemq-mqtt-client</artifactId>
+                <version>${hivemq.mqtt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.moquette</groupId>
+                <artifactId>moquette-broker</artifactId>
+                <version>${moquette.version}</version>
+                <scope>test</scope>
+            </dependency>
+
             <!-- 本仓模块 -->
             <dependency>
                 <groupId>cn.ypbin</groupId>
@@ -69,6 +82,11 @@
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-protocol-modbus</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>cn.ypbin</groupId>
+                <artifactId>ypbin-iot-protocol-mqtt</artifactId>
                 <version>${revision}</version>
             </dependency>
             <dependency>

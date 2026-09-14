@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cn.ypbin</groupId>
+        <artifactId>ypbin-iot-dependencies</artifactId>
+        <version>${revision}</version>
+        <relativePath>../ypbin-iot-dependencies/pom.xml</relativePath>
+    </parent>
+
+    <artifactId>ypbin-iot-protocol-mqtt</artifactId>
+
+    <name>${project.artifactId}</name>
+    <description>MQTT 3.1.1 / 5.0 协议适配器（基于 HiveMQ 客户端，原生推送订阅）</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- 协议库：必须 compile 传递（引入本模块即可用，AGENTS R8） -->
+        <dependency>
+            <groupId>com.hivemq</groupId>
+            <artifactId>hivemq-mqtt-client</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 嵌入式 broker：MQTT 必须有 broker 才能端到端验证 -->
+        <dependency>
+            <groupId>io.moquette</groupId>
+            <artifactId>moquette-broker</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

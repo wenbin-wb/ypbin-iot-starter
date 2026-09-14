@@ -49,6 +49,11 @@
                 <artifactId>ypbin-iot-protocol-modbus</artifactId>
                 <version>${revision}</version>
             </dependency>
+            <dependency>
+                <groupId>cn.ypbin</groupId>
+                <artifactId>ypbin-iot-protocol-mqtt</artifactId>
+                <version>${revision}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 </project>

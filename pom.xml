@@ -49,6 +49,7 @@
         <module>ypbin-iot-spring-boot-starter</module>
         <module>ypbin-iot-protocol-tcp</module>
         <module>ypbin-iot-protocol-modbus</module>
+        <module>ypbin-iot-protocol-mqtt</module>
         <module>ypbin-iot-test</module>
         <module>ypbin-iot-architecture-tests</module>
     </modules>
@@ -65,6 +66,10 @@
 
         <!-- 协议库：Modbus（EPL-2.0） -->
         <modbus.version>2.1.6</modbus.version>
+
+        <!-- 协议库：MQTT -->
+        <hivemq.mqtt.version>1.4.0</hivemq.mqtt.version>
+        <moquette.version>0.17</moquette.version>
     </properties>
 
     <build>
