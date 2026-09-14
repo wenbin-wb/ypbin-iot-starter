@@ -30,6 +30,14 @@
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
         </dependency>
+        <!-- 配置元数据处理器：没有它，宿主 IDE 对 ypbin.iot.protocol.* 的配置项
+             不会有任何补全与说明（不会报错，只是静默失去提示）。
+             由 tools/export-config-metadata.mjs 的 check 模式在 CI 守住。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <properties>

@@ -16,16 +16,19 @@ export MAVEN_OPTS="${MAVEN_OPTS:--Xmx768m}"
 
 step() { echo; echo "===== $* ====="; }
 
-step "1/4 全量构建与单元测试（不带任何 -P：这是唯一会跑架构约束门禁的方式）"
+step "1/5 全量构建与单元测试（不带任何 -P：这是唯一会跑架构约束门禁的方式）"
 mvn -B -ntp clean test
 
-step "2/4 NullAway 空值语义门禁（含执行自检）"
+step "2/5 NullAway 空值语义门禁（含执行自检）"
 tools/check-nullaway.sh
 
-step "3/4 依赖版本收敛"
+step "3/5 依赖版本收敛"
 mvn -B -ntp -Pdep-convergence validate
 
-step "4/4 SBOM 生成（顺带验证 sbom profile 能带回架构测试模块）"
+step "4/5 配置元数据漂移"
+node tools/export-config-metadata.mjs --check
+
+step "5/5 SBOM 生成（顺带验证 sbom profile 能带回架构测试模块）"
 mvn -B -ntp -Psbom verify -DskipTests
 
 echo

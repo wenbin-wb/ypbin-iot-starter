@@ -35,6 +35,9 @@ jobs:
       - name: 依赖版本收敛
         run: mvn -B -ntp -Pdep-convergence validate
 
+      - name: 校验配置元数据未漂移
+        run: node tools/export-config-metadata.mjs --check
+
       - name: 生成 CycloneDX SBOM（软件物料清单）
         run: mvn -B -ntp -Psbom verify -DskipTests
 

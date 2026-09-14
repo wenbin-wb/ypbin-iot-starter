@@ -50,6 +50,21 @@
             <artifactId>ypbin-iot-protocol-tcp</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- 必须把**全部**协议模块放进 classpath：ArchUnit 规则用 importPackages("cn.ypbin.iot")，
+             不在 classpath 上的模块会被**静默跳过**——「协议实现包不得使用 Spring 类型」
+             这类规则会看起来通过、实则从未检查过它们。 -->
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-protocol-modbus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-protocol-mqtt</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-protocol-opcua</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5</artifactId>

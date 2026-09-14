@@ -17,8 +17,12 @@ package cn.ypbin.iot.arch;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -85,6 +89,44 @@ class ConfigMetadataTest {
     }
 
     @Test
+    @DisplayName("CFGMETA-04 每个带 @ConfigurationProperties 的模块都必须产出元数据")
+    void everyModuleWithConfigurationPropertiesMustProduceMetadata() {
+        // 这条是本门禁真正防住的回归：协议模块曾**只有注解、没有配置处理器**，
+        // 于是 ypbin.iot.protocol.* 的配置项在宿主 IDE 里完全没有补全
+        // （不报错、不影响运行，只是静默失去提示）。
+        List<String> modules = List.of(
+                "ypbin-iot-spring-boot-starter",
+                "ypbin-iot-protocol-tcp",
+                "ypbin-iot-protocol-modbus",
+                "ypbin-iot-protocol-mqtt",
+                "ypbin-iot-protocol-opcua");
+        List<String> missing = new ArrayList<>();
+        for (String module : modules) {
+            boolean found = false;
+            try {
+                Enumeration<URL> resources = ConfigMetadataTest.class.getClassLoader()
+                        .getResources(METADATA_RESOURCE);
+                while (resources.hasMoreElements()) {
+                    if (resources.nextElement().toString().contains(module)) {
+                        found = true;
+                        break;
+                    }
+                }
+            } catch (IOException ex) {
+                throw new IllegalStateException("无法枚举配置元数据资源", ex);
+            }
+            if (!found) {
+                missing.add(module);
+            }
+        }
+        assertThat(missing)
+                .as("以下模块没有产出 spring-configuration-metadata.json —— "
+                        + "通常是漏了 spring-boot-configuration-processor 依赖，"
+                        + "宿主 IDE 会静默失去这些配置项的补全")
+                .isEmpty();
+    }
+
+    @Test
     @DisplayName("CFGMETA-03 自检：前缀清单必须与配置类实际声明一致（防止清单过期后误放行）")
     void prefixListMustMatchDeclaredAnnotation() {
         ConfigurationProperties annotation = IotPropertiesPrefixes.TYPE
@@ -95,6 +137,30 @@ class ConfigMetadataTest {
         assertThat(annotation.prefix())
                 .as("配置类的前缀变了但门禁清单没跟着变")
                 .isEqualTo(IotPropertiesPrefixes.ROOT);
+    }
+
+    @Test
+    @DisplayName("CFGMETA-05 自检：全部协议模块都必须在 arch-tests 的 classpath 上")
+    void allProtocolModulesMustBeOnClasspath() {
+        // ArchUnit 规则用 importPackages("cn.ypbin.iot")：**不在 classpath 上的模块会被静默跳过**。
+        // 本仓曾只依赖 protocol-tcp，于是 modbus/mqtt/opcua 的字节码规则（如
+        // 「协议实现包不得使用 Spring 类型」）看起来通过、实则从未检查过它们。
+        // 这条自检把「规则覆盖了哪些模块」变成可断言的事实。
+        List<String> protocolPackages = List.of(
+                "cn/ypbin/iot/protocol/tcp",
+                "cn/ypbin/iot/protocol/modbus",
+                "cn/ypbin/iot/protocol/mqtt",
+                "cn/ypbin/iot/protocol/opcua");
+        List<String> missing = new ArrayList<>();
+        for (String pkg : protocolPackages) {
+            if (ConfigMetadataTest.class.getClassLoader().getResource(pkg) == null) {
+                missing.add(pkg);
+            }
+        }
+        assertThat(missing)
+                .as("以下协议模块不在 arch-tests 的 classpath 上 —— 架构规则会静默跳过它们；"
+                        + "请在 ypbin-iot-architecture-tests/pom.xml 中补上依赖")
+                .isEmpty();
     }
 
     /**

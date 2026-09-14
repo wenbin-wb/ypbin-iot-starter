@@ -25,7 +25,8 @@
 | 架构约束（ArchUnit） | 分层依赖、编码铁律、规则有效性自检 | `mvn -pl ypbin-iot-architecture-tests -am test` |
 | 源码规范 | 禁内联 FQCN、`@Bean` 覆盖语义、autoconfig 注册、禁 `ordinal()` | 同上（`SourceConventionTest`） |
 | 模块发布边界 | 非发布模块必须由 `dev-only` profile 承载 | 同上（`ModulePublishingTest`） |
-| 配置元数据 | 每个 `@ConfigurationProperties` 前缀都必须有元数据 | 同上（`ConfigMetadataTest`） |
+| 配置元数据 | 每个带 `@ConfigurationProperties` 的模块都必须产出元数据；前缀齐全；协议模块必须在 arch-tests classpath 上 | 同上（`ConfigMetadataTest` CFGMETA-01~05） |
+| 配置元数据漂移 | 提交的聚合元数据必须与构建产物一致 | `node tools/export-config-metadata.mjs --check` |
 | 覆盖率 | 指令 ≥ 0.80、**分支 ≥ 0.64**（防倒退下限，非目标） | `mvn -pl <模块> -am test` |
 | 空值语义（NullAway） | 8 个模块参与；**含「门禁是否真的执行过」自检** | `tools/check-nullaway.sh` |
 | 依赖版本收敛 | enforcer `dependencyConvergence` | `mvn -Pdep-convergence validate` |
@@ -36,8 +37,8 @@
 > 门禁一律经过**反向验证**（注入违规必须红、撤掉必须绿）。本仓已因此发现并修掉两类问题：
 > 一个放在 `pluginManagement` 里**永不生效**的覆盖率门禁，以及一套**被上游短路成死代码**的安全实现。
 
-**未接入（见 `ROADMAP.md`）**：GPG 签名与 `central-publishing`（发布前必须补齐）；
-配置元数据的**跨模块聚合导出脚本**（单模块元数据校验已由 `ConfigMetadataTest` 覆盖）。
+**未接入（见 `ROADMAP.md`）**：发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号。
+发布插件本身已配置在根 pom 的 `release` profile，且 `-Prelease` 反应堆已实测不含非发布模块。
 
 ## 文档
 

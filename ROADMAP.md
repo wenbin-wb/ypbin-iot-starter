@@ -34,7 +34,7 @@
   - ✅ 配置元数据（`ConfigMetadataTest`，已反向验证）
   - ✅ 注册发现：**已有**（`IotAutoConfigurationTest.CFG-08` 已做 SpringFactoriesLoader 发现，不重复建设）
   - ✅ 编码规则（printStackTrace/System.out/字段注入/Collections）：**已有**（`ARCH-05`）
-- ✅ `tools/`：`check-nullaway.sh`（含执行自检）+ `preflight.sh`（发布前总检）；缺跨模块元数据**导出**脚本
+- ✅ `tools/`：`check-nullaway.sh`（含执行自检）、`export-config-metadata.mjs`（聚合 + 漂移门禁，已反向验证）、`preflight.sh`（发布前总检）
 - ✅ 发布前置：GPG + `central-publishing-maven-plugin`（在根 pom 的 release profile；`-Prelease` 反应堆已实测不含非发布模块）
 - ⬜ 发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号
 
@@ -45,6 +45,18 @@
 - ⬜ 指标桥（Micrometer）——当前默认无操作实现，**指标会被丢弃**
 - ⬜ GB/T 26875（消防）双版本
 - ⬜ 剩余候选协议（见 `docs/PROTOCOLS.md` 的选型清单）
+
+## 审计发现并已修的两个门禁缺陷（2026-09-14）
+
+1. **协议模块没有配置处理器**：4 个协议模块都用了 `@ConfigurationProperties` 但没有
+   `spring-boot-configuration-processor`，宿主的 IDE 对 `ypbin.iot.protocol.*` 的所有配置项
+   **没有任何补全**（不报错、不影响运行，只是静默失去提示）。元数据从 1 模块/19 项 → **5 模块/50 项**。
+2. **ArchUnit 规则静默跳过 3 个协议模块**：arch-tests 只依赖 `protocol-tcp`，
+   而规则用 `importPackages("cn.ypbin.iot")` —— modbus/mqtt/opcua 的字节码**不在 classpath 上**，
+   于是「协议实现包不得使用 Spring 类型」这类规则**看起来通过、实则从未检查过它们**。
+   已补齐依赖，并加 `CFGMETA-05` 自检把「规则覆盖了哪些模块」变成可断言的事实。
+
+> 这两个都不是「代码写错」，而是**门禁覆盖范围与它声称的不一致** —— 同一族问题的第 N 次出现。
 
 ## 已知技术债（⬜）
 
