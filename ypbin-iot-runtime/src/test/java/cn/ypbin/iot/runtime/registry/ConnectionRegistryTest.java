@@ -204,6 +204,9 @@ class ConnectionRegistryTest {
                         .as("每个等待者都必须收到原始 ConnectionException（不得是 CompletionException 包装）")
                         .isInstanceOf(ConnectionException.class);
             }
+            // 「先完成异常、后摘除条目」是为保住单飞（先摘除会让新调用者当它是新键而重复建链），
+            // 因此断言的是「最终不残留」而不是「同一瞬间已摘除」
+            awaitUntil(() -> registry.activeCount() == 0, Duration.ofSeconds(3));
             assertThat(registry.activeCount()).as("失败后不得残留注册项").isZero();
         } finally {
             pool.shutdownNow();

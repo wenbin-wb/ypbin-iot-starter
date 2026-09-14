@@ -28,6 +28,18 @@
                 <scope>import</scope>
             </dependency>
 
+            <!-- 协议库：Modbus（EPL-2.0，基于 Netty，异步 API） -->
+            <dependency>
+                <groupId>com.digitalpetri.modbus</groupId>
+                <artifactId>modbus-tcp</artifactId>
+                <version>${modbus.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.digitalpetri.modbus</groupId>
+                <artifactId>modbus-serial</artifactId>
+                <version>${modbus.version}</version>
+            </dependency>
+
             <!-- 本仓模块 -->
             <dependency>
                 <groupId>cn.ypbin</groupId>
@@ -52,6 +64,11 @@
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-protocol-tcp</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>cn.ypbin</groupId>
+                <artifactId>ypbin-iot-protocol-modbus</artifactId>
                 <version>${revision}</version>
             </dependency>
             <dependency>

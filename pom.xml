@@ -48,6 +48,7 @@
         <module>ypbin-iot-transport</module>
         <module>ypbin-iot-spring-boot-starter</module>
         <module>ypbin-iot-protocol-tcp</module>
+        <module>ypbin-iot-protocol-modbus</module>
         <module>ypbin-iot-test</module>
         <module>ypbin-iot-architecture-tests</module>
     </modules>
@@ -61,6 +62,9 @@
 
         <!-- 网络底座：锁定 4.1 线最新补丁版（PROTOCOLS §4.1） -->
         <netty.version>4.1.138.Final</netty.version>
+
+        <!-- 协议库：Modbus（EPL-2.0） -->
+        <modbus.version>2.1.6</modbus.version>
     </properties>
 
     <build>
