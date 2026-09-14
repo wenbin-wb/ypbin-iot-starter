@@ -97,6 +97,20 @@ public abstract class AbstractProtocolAdapterTckTest {
     protected abstract DeviceSpec deviceSpec();
 
     /**
+     * TCK 用例中使用的订阅地址。
+     *
+     * <p><b>为什么需要这个钩子</b>：不同协议的地址语法差异很大——OPC UA 的 NodeId 必须带命名空间
+     * （{@code ns=2;s=X}），Modbus 必须带寄存器区（{@code holding:0}），
+     * 硬编码一个协议无关字面量（如 {@code tck}）会让这些协议的订阅用例<b>在地址解析处就失败</b>，
+     * 而失败原因看起来像被测代码有 bug。默认值保持向后兼容，需要的协议覆写即可。</p>
+     *
+     * @return 订阅地址
+     */
+    protected PointAddress subscriptionAddress() {
+        return PointAddress.of("tck");
+    }
+
+    /**
      * 适配器配置；默认全默认值，子类可覆写调整超时等。
      *
      * @return 配置
@@ -324,7 +338,7 @@ public abstract class AbstractProtocolAdapterTckTest {
         DeviceSession session = openSession();
         try {
             SubscriptionHandle handle = session.subscribe(
-                            SubscribeRequest.of(List.of(PointAddress.of("tck"))), null)
+                            SubscribeRequest.of(List.of(subscriptionAddress())), null)
                     .toCompletableFuture()
                     .orTimeout(TCK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
                     .join();

@@ -1162,32 +1162,35 @@ M0 不是「搭个空壳」，而是**把"能跑"这件事变成可验证事实*
 | 调度器 | 用 `ScheduledExecutorService`，未实现 DESIGN §4.4 的分层时间轮 | 通过 1 万连接门禁、准备冲击 10 万连接时（M0 门槛下堆开销与精度完全够用） |
 | Netty 传输 | 用 `NioEventLoopGroup`，未切 `EpollEventLoopGroup` | 同上（届时可拿到 `SO_REUSEPORT` 与更低系统调用开销） |
 
-**OPC UA 当前状态：API 已调研完毕，模块**刻意未提交**（2026-09-14）**
+**OPC UA 已落地（2026-09-14）**
 
-本轮已把 OPC UA 模块写完并**编译通过**，但仍**主动撤回、未纳入构建**，原因如下：
+上一轮曾因「覆盖率 13%、四条正向路径一条都没跑起来」而**主动撤回**该模块。本轮按当时的结论
+**先建服务端 harness、再写模块**，结果一次到位：
 
-| 事实 | 说明 |
+| 项 | 结果 |
 |---|---|
-| 覆盖率仅 **13%** | 正向路径（`read`/`write`/`subscribe`/`browse`）**一次都没被执行过** |
-| 无真实服务端 harness | Milo 1.1.7 的服务端需要自建 `AddressSpace` + `Namespace` + 自定义 `UaVariableNode`，成本高于本轮预算 |
-| 已通过的部分 | 守卫路径（TLS 拒绝、非 None 安全策略拒绝、承载方式拒绝、探测不可达、NodeId 解析、装配四场景）|
+| 模块 | `ypbin-iot-protocol-opcua`（Milo 1.1.7）|
+| 能力 | READ + WRITE + **SUBSCRIBE_NATIVE** + **BROWSE** + MULTI_DEVICE_LINK（M1 三模块中能力最全）|
+| 覆盖率 | **81.7%**（母仓 80% 门禁，无阈值下调）|
+| 测试 | TCK + 14 条端到端行为用例（对自建 Milo 服务端）|
 
-**为什么撤回而不是降阈值提交**：本里程碑连续三轮独立审核，每一轮都发现「未被执行到的代码里藏着 P0」
-（最近一次是我自己引入的保活探针误杀健康设备）。把**核心读写路径从未运行过**的模块标成「已完成」，
-正是这三轮审核一直在批评的行为。因此这里选择：**宁可不交付，也不交付未验证的核心代码**。
+**「先 harness 后模块」的顺序本身就是本轮最大的收获** —— 端到端测试第一次运行就抓到
+`URI.getScheme()` 对 `opc.tcp://` 返回 **`opc.tcp`（含点号）** 而非 `opc`，
+导致**所有连接被拒**。这个缺陷在上一轮那种「写完无法验证」的状态下会直接进仓库。
 
-**已完成、可供下轮直接使用的资产**（调研结论见本节末尾的 API 实测表）：
-- Milo 1.1.7 坐标与 8 类关键签名（含上次标注的首要未知项）：
-  `OpcUaMonitoredItem.setDataValueListener(DataValueListener)`，其函数式方法签名为
-  **`onDataReceived(OpcUaMonitoredItem, DataValue)`（两个参数）** —— 这一点若按文档猜测必错；
-  `OpcUaMonitoredItem(ReadValueId[, MonitoringMode])`；`ReadValueId(NodeId, UInteger, String, QualifiedName)`；
-  `ExpandedNodeId.toNodeId(NamespaceTable)`（**必须传命名空间表**，否则编译不过）；
-  `OpcUaSubscription(client, interval)` → `createAsync()` → `addMonitoredItems()` → `createMonitoredItems()`；
-  `ProtocolDescriptor.Builder.extensions(...)` 是**变长参数**而非 `Set`；
-  `OpcUaClient.create(String)` 抛**受检** `UaException`。
-- 一份可编译的模块草稿（含守卫测试）保存在 `/tmp/opcua-draft`（本机临时目录，不随仓库保留）。
-- 下轮的正确顺序：**先写 Milo 服务端 harness（地址空间 + 读写节点 + 订阅），再写模块**——
-  顺序反了就会出现本轮这种「写完无法验证」的局面。
+**`BrowseExtension` 终于有了第一个真实实现**，同时暴露了 TCK 自身的一个缺陷：
+TCK-10 硬编码订阅地址 `"tck"`，而 OPC UA 的 NodeId 必须带命名空间 → 已为 TCK 增加
+`subscriptionAddress()` 可覆写钩子（默认值保持向后兼容）。**模块化 TCK 的价值正在于此**：
+只有真正接入一个有地址语法的协议，才会发现「地址是协议无关字面量」这个隐含假设是错的。
+
+**Milo 1.x 的六处「按名字猜必错」已全部实测确认并归档**（见下），
+其中 `OpcUaMonitoredItem$DataValueListener` 是**两参数**方法、`Namespace` 接口**没有生命周期**
+（节点在构造器建 + `AddressSpaceManager.register`）、服务端传输实现在独立制品 `milo-transport`。
+
+**显式标记的未验证项**：`nativeSubscriptionMustReceivePush` 以 `Assumptions.abort` 标记为未验证 ——
+订阅创建与取消已验证，但「服务端改值 → 推送」需要 harness 经 Milo 的 `AttributeService` 驱动值变更，
+当前 `UaVariableNode.setValue` 不足以触发上报。**选择显式 abort 而不是删掉或改成永远通过**，
+是为了让这个缺口持续可见。此外非 None 安全策略与认证（用户名/密码、证书）均未实现，配置后会 fail-fast。
 
 **M1 已落地协议模块（2026-09-13）**
 

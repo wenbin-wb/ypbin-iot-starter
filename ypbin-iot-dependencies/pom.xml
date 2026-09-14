@@ -53,6 +53,26 @@
                 <scope>test</scope>
             </dependency>
 
+            <!-- 协议库：OPC UA（MPL-2.0 / EPL-2.0）。
+                 注意：服务端传输实现不在 milo-sdk-server 里，而在独立的 milo-transport 制品 —— 这点按名字猜会找不到类 -->
+            <dependency>
+                <groupId>org.eclipse.milo</groupId>
+                <artifactId>milo-sdk-client</artifactId>
+                <version>${milo.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.milo</groupId>
+                <artifactId>milo-sdk-server</artifactId>
+                <version>${milo.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.milo</groupId>
+                <artifactId>milo-transport</artifactId>
+                <version>${milo.version}</version>
+                <scope>test</scope>
+            </dependency>
+
             <!-- 本仓模块 -->
             <dependency>
                 <groupId>cn.ypbin</groupId>
@@ -87,6 +107,11 @@
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-protocol-mqtt</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>cn.ypbin</groupId>
+                <artifactId>ypbin-iot-protocol-opcua</artifactId>
                 <version>${revision}</version>
             </dependency>
             <dependency>

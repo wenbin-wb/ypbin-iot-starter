@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cn.ypbin</groupId>
+        <artifactId>ypbin-iot-dependencies</artifactId>
+        <version>${revision}</version>
+        <relativePath>../ypbin-iot-dependencies/pom.xml</relativePath>
+    </parent>
+
+    <artifactId>ypbin-iot-protocol-opcua</artifactId>
+
+    <name>${project.artifactId}</name>
+    <description>OPC UA 协议适配器（基于 Eclipse Milo，含原生订阅与地址空间浏览扩展）</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- 协议库：必须 compile 传递（引入本模块即可用，AGENTS R8） -->
+        <dependency>
+            <groupId>org.eclipse.milo</groupId>
+            <artifactId>milo-sdk-client</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 同源服务端：用协议库自带的服务端做对端，避免另造一套 OPC UA 栈 -->
+        <dependency>
+            <groupId>org.eclipse.milo</groupId>
+            <artifactId>milo-sdk-server</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 服务端传输实现（Netty）在独立制品里，milo-sdk-server 不传递它 -->
+        <dependency>
+            <groupId>org.eclipse.milo</groupId>
+            <artifactId>milo-transport</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

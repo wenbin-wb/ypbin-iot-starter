@@ -50,6 +50,7 @@
         <module>ypbin-iot-protocol-tcp</module>
         <module>ypbin-iot-protocol-modbus</module>
         <module>ypbin-iot-protocol-mqtt</module>
+        <module>ypbin-iot-protocol-opcua</module>
         <module>ypbin-iot-test</module>
         <module>ypbin-iot-architecture-tests</module>
     </modules>
@@ -70,6 +71,9 @@
         <!-- 协议库：MQTT -->
         <hivemq.mqtt.version>1.4.0</hivemq.mqtt.version>
         <moquette.version>0.17</moquette.version>
+
+        <!-- 协议库：OPC UA（MPL-2.0 / EPL-2.0 双许可） -->
+        <milo.version>1.1.7</milo.version>
     </properties>
 
     <build>
