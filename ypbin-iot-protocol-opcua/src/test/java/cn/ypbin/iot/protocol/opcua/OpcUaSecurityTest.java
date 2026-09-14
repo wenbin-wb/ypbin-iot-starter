@@ -16,6 +16,7 @@
 package cn.ypbin.iot.protocol.opcua;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.ypbin.iot.core.context.AdapterContext;
@@ -30,11 +31,16 @@ import cn.ypbin.iot.runtime.context.DefaultAdapterContext;
 import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.context.NoopMetricsRecorder;
 import cn.ypbin.iot.runtime.scheduler.DefaultTaskScheduler;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyStore;
+import java.security.cert.X509Certificate;
 import java.time.Clock;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.eclipse.milo.opcua.stack.core.security.CertificateValidator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -161,6 +167,63 @@ class OpcUaSecurityTest {
                 .hasMessageContaining(OpcUaAdapter.MSG_CREDENTIAL_MISSING);
     }
 
+    @Test
+    @DisplayName("SEC-08 信任列表必须真的约束：受信证书通过、未受信证书被拒")
+    void trustListMustActuallyConstrain() throws Exception {
+        // 这一条直接验证「安全材料装配出来的校验器是否真的在校验」——
+        // 比验证「装配成功」重要得多：一个恒返回成功的校验器也能让装配测试全绿。
+        Path trustedStore = generateKeyStore("trusted");
+        Path trustDir = exportTrustedCertificate(trustedStore, "trusted");
+        Path untrustedStore = generateKeyStore("untrusted");
+
+        OpcUaProperties properties = secured(trustedStore.toString(), trustDir.toString(), null, null);
+        OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties,
+                context(ref -> Optional.of(new CredentialResolver.Credential("u",
+                        STORE_PASSWORD.toCharArray(), Map.of()))), "c1");
+
+        X509Certificate trustedCert = readCertificate(trustedStore);
+        X509Certificate untrustedCert = readCertificate(untrustedStore);
+        CertificateValidator validator = material.certificateValidator();
+
+        // 受信证书必须通过（同时验证我们选的 checks 不会误拒 keytool 默认证书——
+        // 曾经放进去的 EXTENDED_KEY_USAGE_END_ENTITY 就会，因为默认证书没有 EKU 扩展）
+        assertThatCode(() -> validator.validateCertificateChain(List.of(trustedCert),
+                "urn:ypbin:iot:test-server", new String[] {"127.0.0.1"}))
+                .as("受信证书必须通过；若抛错说明 checks 选错了（例如要求了证书没有的 EKU）")
+                .doesNotThrowAnyException();
+
+        // 未受信证书必须被拒——否则「信任列表」形同虚设，等于中间人可任意替换服务端
+        assertThatThrownBy(() -> validator.validateCertificateChain(List.of(untrustedCert),
+                "urn:ypbin:iot:test-server", new String[] {"127.0.0.1"}))
+                .as("未受信证书必须被拒，否则信任列表是装饰")
+                .isInstanceOf(Exception.class);
+    }
+
+    @Test
+    @DisplayName("SEC-09 trust-all 必须真的放行（开发路径语义）")
+    void trustAllMustAcceptAnyCertificate() throws Exception {
+        Path keyStore = generateKeyStore("client");
+        Path otherStore = generateKeyStore("other");
+        OpcUaSecurity.Material material = OpcUaSecurity.prepare(
+                secured(keyStore.toString(), null, null, Boolean.TRUE),
+                context(ref -> Optional.of(new CredentialResolver.Credential("u",
+                        STORE_PASSWORD.toCharArray(), Map.of()))), "c1");
+        assertThatCode(() -> material.certificateValidator()
+                .validateCertificateChain(List.of(readCertificate(otherStore)),
+                        "urn:whatever", new String[] {"10.0.0.1"}))
+                .as("trust-all 必须放行任意服务端证书（仅开发用途）")
+                .doesNotThrowAnyException();
+    }
+
+    private X509Certificate readCertificate(Path keyStore) throws Exception {
+        char[] password = STORE_PASSWORD.toCharArray();
+        try (InputStream input = Files.newInputStream(keyStore)) {
+            KeyStore store = KeyStore.getInstance("PKCS12");
+            store.load(input, password);
+            return (X509Certificate) store.getCertificate(store.aliases().nextElement());
+        }
+    }
+
     private static OpcUaProperties plaintext() {
         return new OpcUaProperties(true, null, null, null, null, null, null, null, null, null, null, null, null);
     }
@@ -177,9 +240,14 @@ class OpcUaSecurityTest {
 
     private Path generateKeyStore(String alias) throws Exception {
         Path keyStore = tempDir.resolve(alias + ".p12");
+        // 必须显式带上 KeyUsage 与 EKU：OPC UA 规范要求终端实体证书具备这两个扩展，
+        // 而 keytool 的默认产物两个都没有（缺任一个都会被证书校验拒绝）。
         runKeytool("-genkeypair", "-alias", alias, "-keyalg", "RSA", "-keysize", "2048",
                 "-validity", "365", "-dname", "CN=ypbin-test", "-keystore", keyStore.toString(),
-                "-storetype", "PKCS12", "-storepass", STORE_PASSWORD, "-keypass", STORE_PASSWORD);
+                "-storetype", "PKCS12", "-storepass", STORE_PASSWORD, "-keypass", STORE_PASSWORD,
+                "-ext", "ku=digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment,keyCertSign,cRLSign",
+                "-ext", "eku=clientAuth,serverAuth",
+                "-ext", "san=ip:127.0.0.1,dns:localhost,uri:urn:ypbin:iot:test-server");
         return keyStore;
     }
 

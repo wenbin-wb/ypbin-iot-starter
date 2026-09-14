@@ -1420,6 +1420,38 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 > 都会让它们假红。这不是门禁太严，而是真实覆盖率确实低——**下一步应补这两模块的分支用例**，
 > 而不是下调阈值。这也是我把 0.64 定性为「防倒退下限而非目标」的原因。
 
+**OPC UA 加密路径验证：从「证明可达」推进到「校验逻辑真的在起作用」（2026-09-14）**
+
+新增 `SEC-08`（受信证书通过 / 未受信证书被拒）与 `SEC-09`（trust-all 放行）。
+`SEC-08` 是这一轮最有价值的用例：**一个恒返回成功的校验器也能让所有装配测试全绿**，
+只有「未受信证书必须被拒」才能证明信任列表不是装饰。
+
+**过程中连撞四项证书要求，全部是真实用户必然会踩的**（逐条实测确认）：
+
+| # | 现象 | 根因 | 正确做法 |
+|---|---|---|---|
+| 1 | `Bad_CertificateUseNotAllowed: KeyUsage extension not found` | `keytool -genkeypair` 默认**既无 KeyUsage 也无 EKU** 扩展 | 签发时必须显式：`-ext ku=... -ext eku=clientAuth,serverAuth` |
+| 2 | `required KeyUsage 'nonRepudiation' not found` | OPC UA 规范要求应用实例证书含 `nonRepudiation` | KeyUsage 至少含 `digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment` |
+| 3 | `required KeyUsage 'keyCertSign' not found` | **自签证书放进信任列表时会被按信任锚（CA）校验** | 自签锚需追加 `keyCertSign,cRLSign`；生产环境应改用「CA 签发叶子证书」 |
+| 4 | `Bad_CertificateUriInvalid` | 保留了 `APPLICATION_URI` 校验，而证书 SAN 里没有对应 URI | 证书 SAN 需含 `uri:<application-uri>`（与 `OpcUaServerConfig.applicationUri` 一致） |
+
+完整可用的签发命令（测试与服务端配置即用此）：
+
+```
+keytool -genkeypair -alias client -keyalg RSA -keysize 2048 -validity 365 \
+  -dname "CN=ypbin-test" -keystore client.p12 -storetype PKCS12 \
+  -storepass changeit -keypass changeit \
+  -ext ku=digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment,keyCertSign,cRLSign \
+  -ext eku=clientAuth,serverAuth \
+  -ext san=ip:127.0.0.1,dns:localhost,uri:urn:ypbin:iot:test-server
+```
+
+> **第 3 条是这一轮最重要的发现**：它说明「自签证书直接丢进信任目录」在 OPC UA 里
+> 会让该证书被当作 CA 校验，因此对 KeyUsage 的要求比普通终端实体更严。
+> 生产环境正确做法是 **CA 签发叶子证书**，信任目录只放 CA（或只放叶子做精确 pin）。
+> 这也再次印证第七轮审核的提醒：**信任目录里放 CA 会让该 CA 签发的任意主体证书通过校验**——
+> 放叶子是精确 pin，放 CA 是信任整个 CA，两者安全含义完全不同，部署时必须明确选择。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |

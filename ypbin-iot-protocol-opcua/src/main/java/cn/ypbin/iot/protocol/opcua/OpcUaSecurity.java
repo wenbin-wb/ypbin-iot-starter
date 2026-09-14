@@ -197,19 +197,23 @@ final class OpcUaSecurity {
         List<X509Certificate> trusted = loadTrustedCertificates(properties.trustListDir(), connectionId);
         trusted.forEach(trustList::addTrustedCertificate);
         CertificateQuarantine quarantine = new MemoryCertificateQuarantine();
-        // 保留有效性 / 用途 / 应用 URI 校验。
+        // 校验集：有效性 + 终端实体用途（KeyUsage 与 ExtendedKeyUsage）+ 应用 URI。
         //
-        // 两点取舍（都有明确理由）：
-        //  ① **不放 EXTENDED_KEY_USAGE_END_ENTITY**：Milo 在证书没有 EKU 扩展时直接抛
-        //     「ExtendedKeyUsage extension not found」，而 keytool 默认生成的证书就没有 EKU →
-        //     放进去会让非 trust-all 路径实际上不可用，且错误会被包装成 connection.failed，
-        //     排查方向被引向网络。
-        //  ② **不放 HOSTNAME**：现场服务器证书的 CN/SAN 常与配置的 host 不一致（IP 直连尤其常见）。
+        // 这四项都是 OPC UA 规范对**终端实体证书**的要求，因此保留不放宽：
+        // 证书缺 KeyUsage 或 EKU 扩展时本连接就不该建立。
+        // （注：`keytool -genkeypair` 的默认产物**两个扩展都没有**，用它会直接报
+        //  `Bad_CertificateUseNotAllowed: KeyUsage extension not found` ——
+        //  这不是框架太严，而是该证书本身不合规；签发时必须显式带上
+        //  `-ext ku=digitalSignature,keyEncipherment -ext eku=clientAuth,serverAuth`。）
+        //
+        // 唯一有意放宽的是 **HOSTNAME**：现场服务器证书的 CN/SAN 常与配置的 host 不一致
+        // （IP 直连尤其常见），保留它会让大量可用的现场设备连不上。
         //
         // 代价必须写清楚：信任目录里**只能放叶子证书**。放 CA 会让该 CA 签发的任意主体证书通过校验。
         Set<ValidationCheck> checks = Set.of(
                 ValidationCheck.VALIDITY,
                 ValidationCheck.KEY_USAGE_END_ENTITY,
+                ValidationCheck.EXTENDED_KEY_USAGE_END_ENTITY,
                 ValidationCheck.APPLICATION_URI);
         return new DefaultClientCertificateValidator(trustList, checks, quarantine);
     }
