@@ -33,6 +33,7 @@ import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.context.EnvCredentialResolver;
 import cn.ypbin.iot.runtime.context.NoopMetricsRecorder;
 import cn.ypbin.iot.runtime.scheduler.DefaultTaskScheduler;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * OPC UA 守卫路径测试（不依赖真实服务端）。
@@ -56,6 +58,10 @@ import org.junit.jupiter.api.Test;
  * @since 2026-09-14
  */
 class OpcUaAdapterGuardTest {
+
+    @TempDir
+    Path tempDir;
+
 
     private DefaultTaskScheduler scheduler;
 
@@ -118,8 +124,11 @@ class OpcUaAdapterGuardTest {
                 })
                 .orTimeout(5, TimeUnit.SECONDS).join();
         assertThat(error)
-                .as("接受未实现的安全策略会让用户以为在签名/加密，实际是明文会话")
+                .as("缺少证书配置时必须显式失败，而不是静默明文")
                 .isInstanceOf(ConnectionException.class);
+        assertThat(String.valueOf(error))
+                .as("安全策略必须真的被实现（走到装配阶段），而不是一律报未实现")
+                .doesNotContain(OpcUaAdapter.MSG_SECURITY_UNSUPPORTED);
     }
 
     @Test
@@ -166,6 +175,38 @@ class OpcUaAdapterGuardTest {
         assertThat(error)
                 .as("缺客户端证书时必须 fail-fast，而不是等到握手阶段报一个误导性的错误")
                 .isInstanceOf(ConnectionException.class);
+        // 关键：必须是**安全材料装配**给出的原因，而不是"策略未实现"——
+        // 后者意味着安全实现被短路成了死代码（本仓确实出现过这个缺陷）
+        assertThat(String.valueOf(error))
+                .as("非 None 策略必须真的走到安全装配，而不是被短路成 security.unsupported")
+                .contains(OpcUaAdapter.MSG_KEYSTORE_MISSING)
+                .doesNotContain(OpcUaAdapter.MSG_SECURITY_UNSUPPORTED);
+    }
+
+    @Test
+    @DisplayName("OPC-03e 非 None 策略必须真的走到建链（安全实现不得是死代码）")
+    void nonNonePolicyMustReachConnectionAttempt() {
+        // 用不存在的 keystore：失败原因必须是「keystore 缺失/不可读」这类**装配期**原因。
+        // 若返回 security.unsupported，说明非 None 策略被短路，整套安全实现不可达。
+        OpcUaAdapter secured = new OpcUaAdapter(new OpcUaProperties(true,
+                "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256", "SignAndEncrypt",
+                Duration.ofSeconds(2), Duration.ofMillis(200), 100, 1, 100, null, "opcua-ref",
+                "/nonexistent/client.p12", tempDir.toString(), null));
+        ConnectionSpec spec = new ConnectionSpec("reach", OpcUaAdapter.PROTOCOL_CODE,
+                Endpoint.of("opc.tcp://127.0.0.1:4840"), Duration.ofSeconds(2), Duration.ofSeconds(2),
+                null, null, Map.of());
+        Throwable error = secured.open(spec, context).toCompletableFuture()
+                .handle((connection, ex) -> {
+                    if (connection != null) {
+                        connection.close();
+                    }
+                    return ex;
+                })
+                .orTimeout(20, TimeUnit.SECONDS).join();
+        assertThat(error).isNotNull();
+        assertThat(String.valueOf(error))
+                .as("必须报装配期原因（keystore 不可读），证明安全路径可达")
+                .doesNotContain(OpcUaAdapter.MSG_SECURITY_UNSUPPORTED);
     }
 
     @Test

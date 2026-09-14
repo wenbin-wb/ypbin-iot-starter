@@ -17,6 +17,7 @@ package cn.ypbin.iot.protocol.opcua;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.exception.ConnectionException;
+import cn.ypbin.iot.core.exception.IotException;
 import cn.ypbin.iot.core.i18n.IotMessageKeys;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
@@ -34,11 +35,13 @@ import cn.ypbin.iot.protocol.opcua.autoconfigure.OpcUaProperties;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.SessionActivityListener;
 import org.eclipse.milo.opcua.sdk.client.UaSession;
@@ -192,11 +195,6 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             return Stages.failed(new ConnectionException(spec.connectionId(), MSG_CREDENTIALS_NEED_SECURITY,
                     properties.username()));
         }
-        if (!properties.isPlaintext()) {
-            // 非 None 策略在 M1 未实现：接受它会让用户以为在签名/加密，实际仍是明文会话
-            return Stages.failed(new ConnectionException(spec.connectionId(), MSG_SECURITY_UNSUPPORTED,
-                    properties.securityPolicy(), properties.securityMode()));
-        }
         int port = endpoint.port() > 0 ? endpoint.port() : DEFAULT_PORT;
         String endpointUrl = "opc.tcp://" + endpoint.host() + ":" + port;
         // 关键：OpcUaClient.create(...) 内部要做端点发现，是**同步网络调用**（实测对静默对端
@@ -209,7 +207,18 @@ public final class OpcUaAdapter implements ProtocolAdapter {
                 .orTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
                 .thenApply(connected -> opened(spec, endpointUrl, connected))
                 .exceptionally(error -> {
-                    throw new ConnectionException(spec.connectionId(), Stages.unwrap(error),
+                    Throwable cause = Stages.unwrap(error);
+                    // 已经是领域异常就**原样抛出**：重包成 CONNECTION_FAILED 会把
+                    // 「keystore 缺失」「策略不支持」这类配置原因抹平，
+                    // 宿主看到的只有「连接失败」，排查方向被引向网络
+                    if (cause instanceof IotException domain) {
+                        throw domain;
+                    }
+                    if (cause instanceof TimeoutException) {
+                        throw new ConnectionException(spec.connectionId(), cause,
+                                IotMessageKeys.CONNECTION_TIMEOUT, endpointUrl);
+                    }
+                    throw new ConnectionException(spec.connectionId(), cause,
                             IotMessageKeys.CONNECTION_FAILED, endpointUrl);
                 }));
     }
@@ -271,6 +280,17 @@ public final class OpcUaAdapter implements ProtocolAdapter {
     }
 
     /**
+     * 归一化安全模式写法。
+     *
+     * <p>Milo 枚举的 {@code name()} 是 PascalCase（{@code SignAndEncrypt}），而配置与文档里
+     * 习惯写 {@code SIGN_AND_ENCRYPT}。不归一化就永远匹配不上，表现为「配了策略却选不中端点」——
+     * 而 Milo 只会报一个 {@code no endpoint selected}，看不出是写法问题。</p>
+     */
+    private static String normalizeMode(String mode) {
+        return mode == null ? "" : mode.replace("_", "").toLowerCase(Locale.ROOT);
+    }
+
+    /**
      * 按配置的安全策略与模式选择服务端端点。
      */
     private Optional<EndpointDescription> selectEndpoint(List<EndpointDescription> endpoints,
@@ -278,7 +298,8 @@ public final class OpcUaAdapter implements ProtocolAdapter {
         Optional<EndpointDescription> matched = endpoints.stream()
                 .filter(endpoint -> properties.securityPolicy().equals(endpoint.getSecurityPolicyUri()))
                 .filter(endpoint -> endpoint.getSecurityMode() != null
-                        && properties.securityMode().equalsIgnoreCase(endpoint.getSecurityMode().name()))
+                        && normalizeMode(properties.securityMode())
+                                .equals(normalizeMode(endpoint.getSecurityMode().name())))
                 .findFirst();
         if (matched.isEmpty()) {
             log.warn("[ypbin-iot] no OPC UA endpoint matched policy {} / mode {} for connection {}; "

@@ -1365,6 +1365,27 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
    这一步，我会带着一个**永不触发的门禁**提交，并在报告里声称「已加分支覆盖率门禁」。
    **已固化的做法**：任何新增门禁都必须做一次反向验证（注入违规必须红，撤掉必须绿）。
 
+**第六轮审核（对 ③ 安全实现）发现的 2 个 P0 + 8 个 P1 —— 其中一条是「交付宣称失实」**
+
+| 级别 | 问题 | 实证 | 修复 |
+|---|---|---|---|
+| **P0** | **整套安全实现不可达**：`OpcUaAdapter` 里「非 None 策略一律拒绝」的守卫（早先未实现时加的）**从未移除**，`createClient`/`selectEndpoint` 只能跑到明文分支 | JaCoCo 方法级：`selectEndpoint` **0 覆盖**；探针：非 None+缺 keystore 返回 `security.unsupported` 而非 `keystore.missing` | 移除短路；新增 `OPC-03e` 证明安全路径可达 |
+| **P0** | **文档键不生效导致静默明文**：`DESIGN.md` 写 `...opcua.extended.security-policy`，真实键是扁平的 `...opcua.security-policy` | ApplicationContextRunner 实测：按文档配 → `isPlaintext=true`、装配成功、**零告警** | 修正 DESIGN 中三处 `.extended.*` 键 |
+| P1 | **安全模式词表永不匹配**：Milo 枚举 `name()` 是 `SignAndEncrypt`，而配置/文档/测试都写 `SIGN_AND_ENCRYPT` | 反射实测：`SIGN_AND_ENCRYPT`→empty、只有 `SignAndEncrypt` 命中；表现为 `no endpoint selected` | `normalizeMode()` 去下划线小写归一化 |
+| P1 | **异步建链吞掉具体原因**：一切异常重包成 `connection.failed` | 测试实测：缺 keystore 报的是 `iot.common.connection.failed` | 领域异常原样抛出；超时单独成类 |
+| P1 | **含私钥的 KeyStore 静态无界缓存** + 反查证书设计 | 每次 `prepare` +1，永久持有私钥 | 改为直接返回 `KeyMaterial(keyPair, certificate)` |
+| P1 | **`EXTENDED_KEY_USAGE_END_ENTITY` 会拒掉 keytool 默认证书**（无 EKU 扩展） | 字节码实测 Milo 直接抛「ExtendedKeyUsage extension not found」，且错误被吞成 `connection.failed` | 去掉 EKU 校验，补回 `APPLICATION_URI`，并写明「信任目录只能放叶子证书」|
+| P1 | 覆盖率门禁对 `transport`/`iot-test` **静默空转**（无 `jacoco.exec` 时 JaCoCo 自身跳过） | Maven 日志逐模块 `Skipping JaCoCo execution due to missing execution data file` | **未修**（`transport` 目前零测试，属独立工作量），已登记 |
+| P1 | 测试绿灯没测到点：5 处 probe 调用**没有一处**用 TLS/非 None/凭据配置去探测；`Stages.messageKeyOf` 两条分支未覆盖 | 复审逐项核对 | 已补 `OPC-03e` 与断言收紧；probe 的配置错误用例待补 |
+
+**这一轮最重要的一条是「交付宣称失实」**：我在 commit 5baa1fa 里写了「③ 完整落地」，
+而当时安全实现被上游守卫短路成**死代码**——README 与 PROTOCOLS 甚至仍写着「未实现」。
+这不是代码 bug，是**我对交付状态的判断错误**，而且是我自己反复记录的那类问题
+（第六轮→第八条教训：「脚本报成功」不等于「改动落地」；这次是「写了代码」不等于「代码可达」）。
+
+> **新增的固化做法**：凡声称某条路径「已实现」，必须有一条**证明它可达**的用例
+> （断言失败原因是该路径特有的，而不是被上游短路后的通用错误）。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |

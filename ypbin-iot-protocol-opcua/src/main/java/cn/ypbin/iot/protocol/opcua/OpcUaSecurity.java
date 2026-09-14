@@ -33,10 +33,8 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import org.eclipse.milo.opcua.sdk.client.identity.IdentityProvider;
 import org.eclipse.milo.opcua.sdk.client.identity.UsernameProvider;
 import org.eclipse.milo.opcua.stack.core.security.CertificateQuarantine;
@@ -108,16 +106,29 @@ final class OpcUaSecurity {
             // 明文策略：无证书、无校验；凭据在 open() 入口已被拒绝，这里不会出现
             return new Material(null, null, null, null);
         }
-        KeyPair keyPair = loadOrGenerateKeyPair(properties, context, connectionId);
+        KeyMaterial keyMaterial = loadKeyPair(properties, context, connectionId);
         if (properties.hasCredentials()) {
-            return new Material(keyPair, certificateOf(keyPair), validatorOf(properties, connectionId),
+            return new Material(keyMaterial.keyPair(), keyMaterial.certificate(),
+                    validatorOf(properties, connectionId),
                     new UsernameProvider(properties.username(), resolvePassword(properties, context,
                             connectionId)));
         }
-        return new Material(keyPair, certificateOf(keyPair), validatorOf(properties, connectionId), null);
+        return new Material(keyMaterial.keyPair(), keyMaterial.certificate(),
+                validatorOf(properties, connectionId), null);
     }
 
-    private static KeyPair loadOrGenerateKeyPair(OpcUaProperties properties, AdapterContext context,
+    /**
+     * 客户端私钥与证书。
+     *
+     * @param keyPair     私钥对
+     * @param certificate 证书
+     * @author wenbin
+     * @since 2026-09-14
+     */
+    private record KeyMaterial(KeyPair keyPair, X509Certificate certificate) {
+    }
+
+    private static KeyMaterial loadKeyPair(OpcUaProperties properties, AdapterContext context,
             String connectionId) {
         if (properties.clientKeyStore() == null || properties.clientKeyStore().isBlank()) {
             // 刻意**不**自动生成自签证书：它的指纹每次进程启动都不同，服务端信任列表无法长期固定，
@@ -126,10 +137,11 @@ final class OpcUaSecurity {
             throw new ConnectionException(connectionId, OpcUaAdapter.MSG_KEYSTORE_MISSING,
                     String.valueOf(properties.securityPolicy()));
         }
-        return loadKeyPair(properties, context, connectionId);
+        return readKeyMaterial(properties, context, connectionId);
     }
 
-    private static KeyPair loadKeyPair(OpcUaProperties properties, AdapterContext context, String connectionId) {
+    private static KeyMaterial readKeyMaterial(OpcUaProperties properties, AdapterContext context,
+            String connectionId) {
         char[] password = resolvePassword(properties, context, connectionId).toCharArray();
         Path path = Path.of(properties.clientKeyStore());
         if (!Files.isRegularFile(path)) {
@@ -148,8 +160,13 @@ final class OpcUaSecurity {
                 Key key = keyStore.getKey(alias, password);
                 if (key instanceof PrivateKey privateKey) {
                     Certificate certificate = keyStore.getCertificate(alias);
-                    CERTIFICATES.put(keyStore, (X509Certificate) certificate);
-                    return new KeyPair(certificate.getPublicKey(), privateKey);
+                    if (certificate == null) {
+                        // 有私钥无证书：签名/加密都无法进行，明确报错而不是带病往下走
+                        throw new ConnectionException(connectionId, OpcUaAdapter.MSG_KEYSTORE_MISSING,
+                                "key entry '" + alias + "' has no certificate");
+                    }
+                    return new KeyMaterial(new KeyPair(certificate.getPublicKey(), privateKey),
+                            (X509Certificate) certificate);
                 }
             }
             throw new ConnectionException(connectionId, OpcUaAdapter.MSG_KEYSTORE_MISSING,
@@ -160,17 +177,6 @@ final class OpcUaSecurity {
             throw new ConnectionException(connectionId, ex, OpcUaAdapter.MSG_KEYSTORE_MISSING,
                     properties.clientKeyStore());
         }
-    }
-
-    /** 最近一次从 keystore 取出的证书（keystore 对象即身份，避免重复 IO 与二次解析）。 */
-    private static final Map<KeyStore, X509Certificate> CERTIFICATES = new ConcurrentHashMap<>();
-
-    private static X509Certificate certificateOf(KeyPair keyPair) {
-        return CERTIFICATES.values().stream()
-                .filter(certificate -> certificate.getPublicKey().equals(keyPair.getPublic()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                        "client certificate not found for the loaded key pair"));
     }
 
     private static CertificateValidator validatorOf(OpcUaProperties properties, String connectionId) {
@@ -191,11 +197,20 @@ final class OpcUaSecurity {
         List<X509Certificate> trusted = loadTrustedCertificates(properties.trustListDir(), connectionId);
         trusted.forEach(trustList::addTrustedCertificate);
         CertificateQuarantine quarantine = new MemoryCertificateQuarantine();
-        // 自签场景下主机名与颁发者链通常对不上：保留有效性/用途校验，放开主机名与链校验由信任列表承担
+        // 保留有效性 / 用途 / 应用 URI 校验。
+        //
+        // 两点取舍（都有明确理由）：
+        //  ① **不放 EXTENDED_KEY_USAGE_END_ENTITY**：Milo 在证书没有 EKU 扩展时直接抛
+        //     「ExtendedKeyUsage extension not found」，而 keytool 默认生成的证书就没有 EKU →
+        //     放进去会让非 trust-all 路径实际上不可用，且错误会被包装成 connection.failed，
+        //     排查方向被引向网络。
+        //  ② **不放 HOSTNAME**：现场服务器证书的 CN/SAN 常与配置的 host 不一致（IP 直连尤其常见）。
+        //
+        // 代价必须写清楚：信任目录里**只能放叶子证书**。放 CA 会让该 CA 签发的任意主体证书通过校验。
         Set<ValidationCheck> checks = Set.of(
                 ValidationCheck.VALIDITY,
                 ValidationCheck.KEY_USAGE_END_ENTITY,
-                ValidationCheck.EXTENDED_KEY_USAGE_END_ENTITY);
+                ValidationCheck.APPLICATION_URI);
         return new DefaultClientCertificateValidator(trustList, checks, quarantine);
     }
 
