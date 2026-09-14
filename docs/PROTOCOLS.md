@@ -1534,6 +1534,29 @@ reactor 内部制品**（core/runtime）去跑测试。**判定产品是否回�
 > 已固化：**文档里凡是「怎么做才能通」的具体命令/部署建议，必须有一条实测用例支撑**，
 > 否则只能写成「未验证」。
 
+**OPC UA 加密会话端到端打通（2026-09-14）——目标 (1) 完成**
+
+`OpcUaSecuredSessionTest` 是**本仓第一条真正跑在 `Basic256Sha256 + SignAndEncrypt` 上的用例**：
+open → ONLINE → bind → read → `Quality.GOOD`。此前只证明了「安全材料装配正确」
+与「校验器会拒绝未受信证书」，从未与加密服务端完成握手。
+
+**打通路径上暴露了一个真实缺陷（只有端到端能发现）**：
+
+| 阶段 | 现象 | 根因与修复 |
+|---|---|---|
+| 首次运行 | 加密通道**建立成功**，但会话在 `CreateSession` 被服务端以 `Bad_CertificateUriInvalid` 拒绝（"The URI specified in the ApplicationDescription does not match the URI in the certificate"） | 客户端从未设置 `ApplicationUri`，沿用库自动推导的 `urn:<hostname>:...`，与证书 SAN 里的 URI **必然不同**。已新增 `OpcUaSecurity.applicationUriOf(cert, connectionId)` 从证书 SAN 取 URI 并 `config.setApplicationUri(...)`；证书无 SAN URI 时显式报错（该证书本就不能用于加密会话）|
+
+> **这条缺陷的形状值得记住**：通道能建、会话永远建不起来，而错误信息与信任/网络都无关。
+> 与之前那些「加密路径整体不可达」「门禁空转」是同一族——**只有真正走通一遍才会暴露**。
+
+**harness 改造（可复用）**：`OpcUaTestServer` 支持可选加密端点，证书由 Milo 的
+`SelfSignedCertificateGenerator` **程序化生成**（其 KeyUsage 含 nonRepudiation/keyCertSign、
+EKU 含 serverAuth/clientAuth、SAN 含 applicationUri，恰好满足 OPC UA 对应用实例证书的要求，
+无需 keytool 介入）；服务端私钥经 `setCertificateManager(new DefaultCertificateManager(
+quarantine, new TestCertificateGroup(...)))` 提供 —— **stack-core 没有现成的 `CertificateGroup`
+实现**，测试侧按 Milo 官方源码（`DefaultCertificateManager` 按 `getCertificateGroupId()` 注册、
+按证书类型 NodeId 取密钥）写了最小实现，类型 ID 用 `NodeIds.RsaSha256ApplicationCertificateType`。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |

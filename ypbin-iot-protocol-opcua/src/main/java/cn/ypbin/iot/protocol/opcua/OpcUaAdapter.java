@@ -278,6 +278,11 @@ public final class OpcUaAdapter implements ProtocolAdapter {
                 config -> {
                     config.setKeyPair(material.keyPair());
                     config.setCertificate(material.certificate());
+                    // 必须声明 ApplicationUri 且与证书 SAN 中的 URI 一致：
+                    // 否则服务端在 CreateSession 时以 Bad_CertificateUriInvalid 拒绝会话
+                    // （通道能建、会话永远建不起来）
+                    config.setApplicationUri(OpcUaSecurity.applicationUriOf(material.certificate(),
+                            spec.connectionId()));
                     config.setCertificateChain(new X509Certificate[] {material.certificate()});
                     config.setCertificateValidator(material.certificateValidator());
                     if (material.identityProvider() != null) {

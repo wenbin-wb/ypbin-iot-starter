@@ -29,8 +29,10 @@ import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
+import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Optional;
@@ -72,6 +74,9 @@ final class OpcUaSecurity {
     private static final String RSA_ALGORITHM = "RSA";
 
     private static final int RSA_KEY_SIZE = 2048;
+
+    /** SubjectAlternativeName 中 URI 的类型编号（RFC 5280：uniformResourceIdentifier = 6）。 */
+    private static final int SAN_URI_TYPE = 6;
 
     private static final int CERT_VALIDITY_DAYS = 365;
 
@@ -126,6 +131,43 @@ final class OpcUaSecurity {
      * @since 2026-09-14
      */
     private record KeyMaterial(KeyPair keyPair, X509Certificate certificate) {
+    }
+
+    /**
+     * 从证书的 SubjectAlternativeName 中取出 application URI。
+     *
+     * <p><b>为什么必须设置</b>：OPC UA 服务端在 CreateSession 时会校验客户端
+     * {@code ApplicationDescription.applicationUri} 与其证书 SAN 中的 URI 是否一致，
+     * 不一致直接以 {@code Bad_CertificateUriInvalid} 拒绝会话。
+     * 客户端若沿用库自动推导的 URI（形如 {@code urn:<hostname>:...}），
+     * 与证书里的 URI 必然不同 —— <b>结果是加密通道能建立、但会话永远建不起来</b>，
+     * 而错误信息看起来与信任/网络都无关。这个缺陷只有在真实加密服务端上才能暴露。</p>
+     *
+     * @param certificate 客户端证书
+     * @param connectionId 链路标识（用于错误定位）
+     * @return SAN 中的 URI
+     * @throws ConnectionException 证书没有 SAN URI 时（该证书不能用于加密会话）
+     */
+    static String applicationUriOf(X509Certificate certificate, String connectionId) {
+        Collection<List<?>> names;
+        try {
+            names = certificate.getSubjectAlternativeNames();
+        } catch (CertificateParsingException ex) {
+            throw new ConnectionException(connectionId, ex, OpcUaAdapter.MSG_KEYSTORE_MISSING,
+                    "unreadable subject alternative names");
+        }
+        if (names != null) {
+            for (List<?> entry : names) {
+                if (entry.size() >= 2 && Integer.valueOf(SAN_URI_TYPE).equals(entry.get(0))
+                        && entry.get(1) instanceof String uri && !uri.isBlank()) {
+                    return uri;
+                }
+            }
+        }
+        // 没有 SAN URI 的证书无法通过服务端的 ApplicationUri 校验：明确报错，
+        // 而不是让它沿用一个必然不匹配的推导 URI 去撞 Bad_CertificateUriInvalid
+        throw new ConnectionException(connectionId, OpcUaAdapter.MSG_KEYSTORE_MISSING,
+                "certificate has no URI in subject alternative names");
     }
 
     private static KeyMaterial loadKeyPair(OpcUaProperties properties, AdapterContext context,

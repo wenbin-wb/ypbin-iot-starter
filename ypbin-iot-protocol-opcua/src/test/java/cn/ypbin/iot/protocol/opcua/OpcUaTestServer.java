@@ -17,6 +17,12 @@ package cn.ypbin.iot.protocol.opcua;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyPair;
+import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,12 +34,18 @@ import org.eclipse.milo.opcua.sdk.server.EndpointConfig;
 import org.eclipse.milo.opcua.sdk.server.ManagedNamespace;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServer;
 import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfig;
+import org.eclipse.milo.opcua.sdk.server.OpcUaServerConfigBuilder;
 import org.eclipse.milo.opcua.sdk.server.items.DataItem;
 import org.eclipse.milo.opcua.sdk.server.items.MonitoredItem;
 import org.eclipse.milo.opcua.sdk.server.nodes.AttributeObserver;
 import org.eclipse.milo.opcua.sdk.server.nodes.UaVariableNode;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
 import org.eclipse.milo.opcua.stack.core.Identifiers;
+import org.eclipse.milo.opcua.stack.core.security.CertificateValidator;
+import org.eclipse.milo.opcua.stack.core.security.DefaultCertificateManager;
+import org.eclipse.milo.opcua.stack.core.security.DefaultServerCertificateValidator;
+import org.eclipse.milo.opcua.stack.core.security.MemoryCertificateQuarantine;
+import org.eclipse.milo.opcua.stack.core.security.MemoryTrustListManager;
 import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
@@ -41,6 +53,7 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
+import org.eclipse.milo.opcua.stack.core.util.SelfSignedCertificateGenerator;
 import org.eclipse.milo.opcua.stack.transport.server.OpcServerTransportFactory;
 import org.eclipse.milo.opcua.stack.transport.server.tcp.OpcTcpServerTransport;
 import org.eclipse.milo.opcua.stack.transport.server.tcp.OpcTcpServerTransportConfig;
@@ -68,6 +81,14 @@ final class OpcUaTestServer implements AutoCloseable {
 
     private static final long STARTUP_TIMEOUT_SECONDS = 20L;
 
+    private static final String APPLICATION_URI = "urn:ypbin:iot:test-server";
+
+    private static final int RSA_KEY_SIZE = 2048;
+
+    private static final int CERT_VALIDITY_DAYS = 365;
+
+    private static final String SIGNATURE_ALGORITHM = "SHA256withRSA";
+
     /** 标量值等级（OPC UA 规范：-1 表示标量）。 */
     private static final int SCALAR_VALUE_RANK = -1;
 
@@ -83,19 +104,59 @@ final class OpcUaTestServer implements AutoCloseable {
 
     private final int port;
 
+    /** 加密模式下服务端证书落盘位置（客户端信任目录用）；明文模式为 {@code null}。 */
+    private final Path serverCertificateFile;
+
     OpcUaTestServer() throws Exception {
+        this(null);
+    }
+
+    /**
+     * 创建测试服务端，可选启用加密端点。
+     *
+     * @param trustedClientCertificate 需要信任的客户端证书；为 {@code null} 时只开明文端点
+     */
+    OpcUaTestServer(X509Certificate trustedClientCertificate) throws Exception {
         this.port = freePort();
-        OpcUaServerConfig config = OpcUaServerConfig.builder()
-                .setApplicationUri("urn:ypbin:iot:test-server")
-                .setApplicationName(LocalizedText.english("ypbin iot test server"))
-                .setEndpoints(Set.of(EndpointConfig.newBuilder()
-                        .setBindAddress("127.0.0.1")
-                        .setBindPort(port)
-                        .setHostname("127.0.0.1")
-                        .setSecurityPolicy(SecurityPolicy.None)
-                        .setSecurityMode(MessageSecurityMode.None)
-                        .build()))
-                .build();
+        EndpointConfig.Builder plaintext = EndpointConfig.newBuilder()
+                .setBindAddress("127.0.0.1")
+                .setBindPort(port)
+                .setHostname("127.0.0.1")
+                .setSecurityPolicy(SecurityPolicy.None)
+                .setSecurityMode(MessageSecurityMode.None);
+        OpcUaServerConfigBuilder configBuilder = OpcUaServerConfig.builder()
+                .setApplicationUri(APPLICATION_URI)
+                .setApplicationName(LocalizedText.english("ypbin iot test server"));
+        if (trustedClientCertificate == null) {
+            configBuilder.setEndpoints(Set.of(plaintext.build()));
+            this.serverCertificateFile = null;
+        } else {
+            // 加密端点：服务端必须有**私钥**才能签名/解密，而 EndpointConfig 只接受证书 ——
+            // 私钥只能经 setCertificateManager 提供（stack-core 无现成的 CertificateGroup 实现，
+            // 故测试侧用 TestCertificateGroup）。
+            KeyPair serverKeyPair = SelfSignedCertificateGenerator.generateRsaKeyPair(RSA_KEY_SIZE);
+            X509Certificate serverCertificate = generateSelfSigned(serverKeyPair);
+            this.serverCertificateFile = writeCertificate(serverCertificate);
+
+            MemoryTrustListManager trustList = new MemoryTrustListManager();
+            trustList.addTrustedCertificate(trustedClientCertificate);
+            MemoryCertificateQuarantine quarantine = new MemoryCertificateQuarantine();
+            CertificateValidator serverValidator = new DefaultServerCertificateValidator(trustList,
+                    quarantine);
+            configBuilder
+                    .setCertificateManager(new DefaultCertificateManager(quarantine,
+                            new TestCertificateGroup(serverKeyPair, serverCertificate, trustList,
+                                    serverValidator)))
+                    .setEndpoints(Set.of(plaintext.build(), EndpointConfig.newBuilder()
+                            .setBindAddress("127.0.0.1")
+                            .setBindPort(port)
+                            .setHostname("127.0.0.1")
+                            .setSecurityPolicy(SecurityPolicy.Basic256Sha256)
+                            .setSecurityMode(MessageSecurityMode.SignAndEncrypt)
+                            .setCertificate(serverCertificate)
+                            .build()));
+        }
+        OpcUaServerConfig config = configBuilder.build();
         OpcServerTransportFactory transportFactory = profile -> new OpcTcpServerTransport(
                 OpcTcpServerTransportConfig.newBuilder().build());
         this.server = new OpcUaServer(config, transportFactory);
@@ -104,6 +165,38 @@ final class OpcUaTestServer implements AutoCloseable {
         // Namespace 无生命周期：注册到地址空间管理器即可
         this.server.getAddressSpaceManager().register(namespace);
         log.debug("[test] opcua test server listening on {}", port);
+    }
+
+    /**
+     * 生成服务端自签证书。
+     *
+     * <p>Milo 的 {@code SelfSignedCertificateGenerator} 生成的扩展恰好满足 OPC UA 对应用实例
+     * 证书的要求（KeyUsage 含 nonRepudiation 与 keyCertSign、EKU 含 serverAuth/clientAuth、
+     * SAN 含 applicationUri），因此不需要外部 keytool 介入。</p>
+     */
+    private X509Certificate generateSelfSigned(KeyPair keyPair) throws Exception {
+        long now = System.currentTimeMillis();
+        return new SelfSignedCertificateGenerator().generateSelfSigned(keyPair,
+                new Date(now - Duration.ofDays(1).toMillis()),
+                new Date(now + Duration.ofDays(CERT_VALIDITY_DAYS).toMillis()),
+                "ypbin-iot-test-server", "ypbin-iot", null, null, null, null,
+                APPLICATION_URI, List.of("localhost"), List.of("127.0.0.1"), SIGNATURE_ALGORITHM);
+    }
+
+    private Path writeCertificate(X509Certificate certificate) throws Exception {
+        Path file = Files.createTempFile("ypbin-iot-server-cert", ".der");
+        Files.write(file, certificate.getEncoded());
+        file.toFile().deleteOnExit();
+        return file;
+    }
+
+    /**
+     * 服务端证书文件（DER）；客户端信任目录使用。
+     *
+     * @return 证书文件路径；明文模式为 {@code null}
+     */
+    Path serverCertificateFile() {
+        return serverCertificateFile;
     }
 
     int port() {
