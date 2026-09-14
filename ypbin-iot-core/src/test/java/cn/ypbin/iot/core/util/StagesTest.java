@@ -78,4 +78,21 @@ class StagesTest {
         CompletableFuture<String> source = CompletableFuture.completedFuture("ok");
         assertThat(Stages.normalize(source).join()).isEqualTo("ok");
     }
+
+    @Test
+    @DisplayName("STAGES-MK 消息键提取：必须保留领域异常的原因，不得一律折叠成兜底键")
+    void messageKeyMustPreserveDomainReason() {
+        // probe() 曾把所有失败折叠成「端点不可达」，于是「配了未实现的 TLS」会被误读为网络问题。
+        // 这个助手就是让真实原因能被带出去。
+        assertThat(Stages.messageKeyOf(new ConnectionException("c1", "iot.modbus.transport.unsupported", "ws"),
+                "fallback")).isEqualTo("iot.modbus.transport.unsupported");
+        assertThat(Stages.messageKeyOf(new CompletionException(new ConnectionException("c1",
+                "iot.opcua.keystore.missing", "x")), "fallback"))
+                .as("必须先 unwrap 再取键")
+                .isEqualTo("iot.opcua.keystore.missing");
+        assertThat(Stages.messageKeyOf(new IllegalStateException("boom"), "fallback"))
+                .as("非领域异常回落到兜底键")
+                .isEqualTo("fallback");
+        assertThat(Stages.messageKeyOf(null, "fallback")).isEqualTo("fallback");
+    }
 }

@@ -337,6 +337,7 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             } finally {
                 connection.close();
             }
-        }).exceptionally(error -> ProbeResult.unreachable(DESCRIPTOR, MSG_CONNECTION_INACTIVE)));
+        }).exceptionally(error -> ProbeResult.unreachable(DESCRIPTOR,
+                        Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE))));
     }
 }

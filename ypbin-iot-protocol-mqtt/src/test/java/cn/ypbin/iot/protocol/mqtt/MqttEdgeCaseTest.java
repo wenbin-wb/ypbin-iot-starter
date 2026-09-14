@@ -284,7 +284,11 @@ class MqttEdgeCaseTest {
         var result = adapter.probe(dead, context).toCompletableFuture()
                 .orTimeout(10, TimeUnit.SECONDS).join();
         assertThat(result.reachable()).isFalse();
-        assertThat(result.failureReason()).isEqualTo(MqttAdapter.MSG_CONNECTION_INACTIVE);
+        // 必须带出**真实**原因（连接失败），而不是一律折叠成「链路不可用」——
+        // 折叠会让「测试连接」这个最常用的诊断入口失去价值，把排查引向网络
+        assertThat(result.failureReason())
+                .isNotBlank()
+                .isNotEqualTo(MqttAdapter.MSG_CONNECTION_INACTIVE);
     }
 
     @Test

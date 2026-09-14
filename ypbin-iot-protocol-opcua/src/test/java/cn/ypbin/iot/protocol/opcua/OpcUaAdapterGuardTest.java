@@ -210,7 +210,10 @@ class OpcUaAdapterGuardTest {
         var result = adapter.probe(dead, context).toCompletableFuture()
                 .orTimeout(20, TimeUnit.SECONDS).join();
         assertThat(result.reachable()).isFalse();
-        assertThat(result.failureReason()).isEqualTo(OpcUaAdapter.MSG_CONNECTION_INACTIVE);
+        assertThat(result.failureReason())
+                .as("必须带出真实原因而不是折叠成「链路不可用」")
+                .isNotBlank()
+                .isNotEqualTo(OpcUaAdapter.MSG_CONNECTION_INACTIVE);
     }
 
     @Test

@@ -15,6 +15,7 @@
  */
 package cn.ypbin.iot.core.util;
 
+import cn.ypbin.iot.core.exception.IotException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -63,6 +64,26 @@ public final class Stages {
      * @param <T>       结果类型
      * @return 失败的 Future
      */
+    /**
+     * 从异常中提取消息键，用于把失败原因<b>原样</b>带出去。
+     *
+     * <p>典型场景是 {@code probe()}：把 TLS 未实现、安全策略不支持这类配置错误
+     * 一律折叠成「端点不可达」，会让「测试连接」这个最常用的诊断入口失去价值——
+     * 宿主的排查方向会被引向网络，而真实原因是配置。</p>
+     *
+     * @param error    原始异常（内部会先 unwrap）
+     * @param fallback 无法提取时的兜底消息键
+     * @return 消息键
+     */
+    public static String messageKeyOf(Throwable error, String fallback) {
+        Throwable unwrapped = unwrap(error);
+        if (unwrapped instanceof IotException iotException
+                && iotException.getMessageKey() != null && !iotException.getMessageKey().isBlank()) {
+            return iotException.getMessageKey();
+        }
+        return fallback;
+    }
+
     public static <T> CompletableFuture<T> failed(Throwable throwable) {
         CompletableFuture<T> future = new CompletableFuture<>();
         future.completeExceptionally(unwrap(throwable));
