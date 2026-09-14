@@ -420,7 +420,9 @@ final class ModbusSession implements DeviceSession {
     @Override
     public CompletionStage<PingResult> ping() {
         long started = System.nanoTime();
-        if (connection.client().isConnected()) {
+        // 必须查链路状态而不是协议库的 isConnected()：断开是异步的，
+        // 刚调用 disconnectAsync 后 isConnected() 仍可能返回 true，导致 ping 误报存活
+        if (!closed.get() && connection.state().isUsable()) {
             return CompletableFuture.completedFuture(
                     PingResult.alive(Duration.ofNanos(System.nanoTime() - started).toMillis()));
         }

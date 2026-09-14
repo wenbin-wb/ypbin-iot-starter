@@ -140,11 +140,18 @@ public final class ModbusAdapter implements ProtocolAdapter {
     @Override
     public CompletionStage<ProtocolConnection> open(ConnectionSpec spec, AdapterContext context) {
         String scheme = spec.endpoint().scheme();
-        ModbusClient client = switch (scheme) {
-            case "tcp", "modbus+tcp" -> createTcpClient(spec);
-            case "serial", "modbus+serial", "rtu" -> createRtuClient(spec);
-            default -> null;
-        };
+        ModbusClient client;
+        try {
+            client = switch (scheme) {
+                case "tcp", "modbus+tcp" -> createTcpClient(spec);
+                case "serial", "modbus+serial", "rtu" -> createRtuClient(spec);
+                default -> null;
+            };
+        } catch (RuntimeException ex) {
+            // 建链参数非法（如串口端点缺设备路径）也必须以失败 Stage 交付，
+            // 不能同步抛出——open 的契约是「返回 Stage」，同步抛会绕过调用方的异常处理路径
+            return Stages.failed(ex);
+        }
         if (client == null) {
             return Stages.failed(new ConnectionException(spec.connectionId(), MSG_TRANSPORT_UNSUPPORTED, scheme));
         }

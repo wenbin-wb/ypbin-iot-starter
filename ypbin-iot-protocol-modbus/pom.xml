@@ -16,44 +16,6 @@
     <name>${project.artifactId}</name>
     <description>Modbus TCP / RTU 协议适配器（基于 digitalpetri modbus，异步 API）</description>
 
-    <build>
-        <plugins>
-            <!--
-              覆盖率阈值：M1 首发取 0.70（母仓标准为 0.80），差额来自两处「无法在 CI 覆盖」的代码：
-                ① createRtuClient 的串口建链路径（需要物理串口设备）
-                ② 分块读的异常分支（需要构造对端返回异常帧的专门模拟器）
-              已覆盖的关键路径：地址两种写法、寄存器/线圈读取与解位、写回读、只读区逐项失败、
-              非法地址逐项失败、一链路多从站、轮询订阅推送与取消、装配四场景。
-              提额计划：接入串口虚拟对（socat pty）后提升到 0.80。
-            -->
-            <plugin>
-                <groupId>org.jacoco</groupId>
-                <artifactId>jacoco-maven-plugin</artifactId>
-                <executions>
-                    <!-- 必须在 execution 级覆盖：父仓的 rules 配在 jacoco-check 执行内，
-                         插件级 configuration 不会生效（Maven 的执行级配置优先级更高） -->
-                    <execution>
-                        <id>jacoco-check</id>
-                        <configuration>
-                            <rules combine.self="override">
-                                <rule>
-                                    <element>BUNDLE</element>
-                                    <limits>
-                                        <limit>
-                                            <counter>INSTRUCTION</counter>
-                                            <value>COVEREDRATIO</value>
-                                            <minimum>0.70</minimum>
-                                        </limit>
-                                    </limits>
-                                </rule>
-                            </rules>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
-
     <dependencies>
         <dependency>
             <groupId>cn.ypbin</groupId>

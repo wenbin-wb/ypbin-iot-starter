@@ -158,6 +158,7 @@ final class ModbusTcpTestServer implements AutoCloseable {
         return switch (functionCode) {
             case 0x01 -> readCoils(unitId, pdu);
             case 0x03 -> readHoldingRegisters(unitId, pdu);
+            case 0x05 -> writeSingleCoil(unitId, pdu);
             case 0x06 -> writeSingleRegister(unitId, pdu);
             default -> exception(functionCode, EXCEPTION_ILLEGAL_FUNCTION);
         };
@@ -195,6 +196,17 @@ final class ModbusTcpTestServer implements AutoCloseable {
             response[3 + index * 2] = (byte) (value & 0xFF);
         }
         return response;
+    }
+
+    private byte[] writeSingleCoil(int unitId, byte[] pdu) {
+        int offset = readUnsignedShort(pdu, 1);
+        int value = readUnsignedShort(pdu, 3);
+        // FC05：0xFF00 表示 ON，0x0000 表示 OFF，其余为非法值
+        if (value != 0xFF00 && value != 0x0000) {
+            return exception(0x05, EXCEPTION_ILLEGAL_DATA_ADDRESS);
+        }
+        coils.computeIfAbsent(unitId, ignored -> new ConcurrentHashMap<>()).put(offset, value == 0xFF00);
+        return new byte[] {0x05, pdu[1], pdu[2], pdu[3], pdu[4]};
     }
 
     private byte[] writeSingleRegister(int unitId, byte[] pdu) {
