@@ -295,6 +295,12 @@ final class OpcUaSession implements DeviceSession {
                     }));
         }
         return Stages.normalize(chain.thenApply(ignored -> {
+            // 与 read 同口径（SPI §4.2）：整条链路不可用且所有写项都失败时必须异常完成，
+            // 否则宿主无法区分「个别写项被拒」与「链路已死」
+            if (!statuses.isEmpty() && statuses.stream().noneMatch(PointWriteStatus::success)
+                    && !connection.state().isUsable()) {
+                throw new ProtocolException(OpcUaAdapter.MSG_CONNECTION_INACTIVE, device.deviceId());
+            }
             Duration elapsed = Duration.between(started, context.clock().instant());
             context.metrics().recordWrite(elapsed, statuses.stream().allMatch(PointWriteStatus::success));
             return new WriteResult(statuses, elapsed);

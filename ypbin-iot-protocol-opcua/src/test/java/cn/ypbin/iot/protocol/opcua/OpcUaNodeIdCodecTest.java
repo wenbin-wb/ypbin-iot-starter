@@ -87,6 +87,16 @@ class OpcUaNodeIdCodecTest {
     }
 
     @Test
+    @DisplayName("NID-06 空标识符必须被拒绝（会被解析成无意义 NodeId）")
+    void emptyIdentifierMustBeRejected() {
+        assertThatThrownBy(() -> OpcUaNodeIdCodec.parse("ns=2;s="))
+                .as("空标识符解析成功但读回 BadNodeIdUnknown，比直接报错难排查")
+                .isInstanceOf(AddressParseException.class);
+        assertThatThrownBy(() -> OpcUaNodeIdCodec.parse("s=")).isInstanceOf(AddressParseException.class);
+        assertThatThrownBy(() -> OpcUaNodeIdCodec.parse("i=")).isInstanceOf(AddressParseException.class);
+    }
+
+    @Test
     @DisplayName("NID-05 格式化必须可往返")
     void formatMustRoundTrip() {
         NodeId nodeId = OpcUaNodeIdCodec.parse("ns=2;s=Device.Temperature");

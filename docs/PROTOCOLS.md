@@ -1293,6 +1293,22 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 > 又一次印证：**行覆盖率 90.5% 不代表功能可用**。本轮两个 P0（重连只生效一次、重连阻塞全局定时器）
 > 都躺在「覆盖率已达标」的代码里，靠独立复审实测才暴露。分支覆盖率仅 68%（starter）才是更诚实的信号。
 
+**② 的残留补齐 + ④ 的廉价项（2026-09-14）**
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| ② 残留 | `EgressRouter.emit(DeviceEvent)` 在**调用者线程**同步执行全部 `DeviceEventListener.onEvent`；`emit(DataBatch)` 在 `BLOCK` 策略下会 `Thread.sleep` 直到 `blockTimeout` | 两者都改为经 `DeliveryDispatcher` 投递：等待与入队整体卸载出调用线程，投递器饱和时计数丢弃（`droppedEvents()`）|
+| ④-1 | OPC UA `ns=2;s=` 空标识符被 `NodeId.parseSafe` 接受，得到无意义 NodeId | 显式拒绝空标识符；新增 NID-06 |
+| ④-2 | OPC UA `write()` 在链路不可用时仍逐项失败并**正常完成**，与 `read()` 口径不一致 | 改为异常完成（SPI §4.2）|
+| ④-3 | OPC UA `bind()` 不校验链路状态，可向已关闭链路注册会话 | 加 `state().isUsable()` 守卫；新增 OPC-04b |
+
+**未处理（如实列出）**：
+- `probe()` 把所有失败折叠成 `MSG_CONNECTION_INACTIVE`（诊断性损失，三个协议模块都有）
+- `MetricsRecorder` 仍在协议线程同步调用 —— 但它的契约本就应是「廉价计数器」，
+  正确做法是在 SPI 里写明**实现不得阻塞**，而不是把每次指标调用也丢进线程池
+- **分支覆盖率门禁未加**：本轮又一次证明行覆盖率会误导（90.5% 行覆盖下藏着两个 P0），
+  starter/runtime 的分支覆盖仅 68%/71%。这是下一步最该补的门禁
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |

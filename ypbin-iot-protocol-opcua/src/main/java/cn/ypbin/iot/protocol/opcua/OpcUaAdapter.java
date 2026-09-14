@@ -245,6 +245,11 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             return Stages.failed(new ConnectionException(connection.connectionId(),
                     MSG_CONNECTION_INACTIVE, connection.getClass().getName()));
         }
+        if (!opcUaConnection.state().isUsable()) {
+            // 向已关闭的链路注册会话会得到一个永不工作的会话（宿主看起来"绑定成功"）
+            return Stages.failed(new ConnectionException(connection.connectionId(),
+                    MSG_CONNECTION_INACTIVE, "connection is not usable"));
+        }
         OpcUaSession session = new OpcUaSession(device, opcUaConnection, context,
                 properties.maxNodesPerRead(), properties.publishingInterval());
         opcUaConnection.register(session);

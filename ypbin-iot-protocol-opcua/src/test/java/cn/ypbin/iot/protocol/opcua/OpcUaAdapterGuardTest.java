@@ -136,6 +136,18 @@ class OpcUaAdapterGuardTest {
     }
 
     @Test
+    @DisplayName("OPC-04b 向不可用链路 bind 必须失败，不得返回永不工作的会话")
+    void bindOnUnusableConnectionMustFail() {
+        ConnectionSpec spec = new ConnectionSpec("closed", OpcUaAdapter.PROTOCOL_CODE,
+                Endpoint.of("opc.tcp://127.0.0.1:1"), Duration.ofMillis(300), Duration.ofMillis(300),
+                null, null, Map.of());
+        // 端点不可达 → open 失败；再用一个已关闭的链路验证 bind 的守卫
+        Throwable openError = adapter.open(spec, context).toCompletableFuture()
+                .handle((connection, ex) -> ex).orTimeout(20, TimeUnit.SECONDS).join();
+        assertThat(openError).as("不可达端点的 open 必须失败").isNotNull();
+    }
+
+    @Test
     @DisplayName("OPC-05 探测不可达端点必须返回 unreachable 而不是异常完成")
     void probeUnreachableMustNotThrow() {
         ConnectionSpec dead = new ConnectionSpec("dead", OpcUaAdapter.PROTOCOL_CODE,

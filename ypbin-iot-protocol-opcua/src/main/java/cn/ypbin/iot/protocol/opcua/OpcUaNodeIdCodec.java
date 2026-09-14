@@ -62,6 +62,11 @@ final class OpcUaNodeIdCodec {
             throw new AddressParseException(PROTOCOL, raw, "NodeId must not be blank");
         }
         String text = raw.trim();
+        if (text.endsWith("=")) {
+            // 形如 ns=2;s= 的空标识符会被 parseSafe 接受，但得到的是无意义 NodeId，
+            // 表现为「解析成功、读回 BadNodeIdUnknown」——比直接报错难排查
+            throw new AddressParseException(PROTOCOL, raw, "NodeId identifier must not be empty");
+        }
         Optional<NodeId> parsed = NodeId.parseSafe(text);
         if (parsed.isEmpty()) {
             throw new AddressParseException(PROTOCOL, raw,

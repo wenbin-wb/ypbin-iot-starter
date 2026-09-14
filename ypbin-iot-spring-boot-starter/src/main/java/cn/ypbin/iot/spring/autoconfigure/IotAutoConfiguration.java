@@ -30,6 +30,7 @@ import cn.ypbin.iot.runtime.context.DefaultAdapterContext;
 import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.context.EnvCredentialResolver;
 import cn.ypbin.iot.runtime.context.NoopMetricsRecorder;
+import cn.ypbin.iot.runtime.delivery.BoundedDeliveryDispatcher;
 import cn.ypbin.iot.runtime.egress.EgressRouter;
 import cn.ypbin.iot.runtime.registry.AdapterRegistry;
 import cn.ypbin.iot.runtime.registry.ConnectionRegistry;
@@ -94,7 +95,7 @@ public class IotAutoConfiguration {
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     public DataEgress iotDataEgress(IotProperties properties, ObjectProvider<DataSink> sinks,
-            ObjectProvider<DeviceEventListener> listeners, Clock clock) {
+            ObjectProvider<DeviceEventListener> listeners, Clock clock, TaskScheduler taskScheduler) {
         IotProperties.EgressProperties egress = properties.egress();
         List<DataSink> sinkList = sinks.orderedStream().toList();
         List<DeviceEventListener> listenerList = listeners.orderedStream().toList();
@@ -103,8 +104,13 @@ public class IotAutoConfiguration {
                     + "Register a DataSink if this application is expected to receive device data.");
         }
         log.debug("[ypbin-iot] iotDataEgress configured with {} sink(s).", sinkList.size());
+        // 出口也需要投递器：设备事件回调与 BLOCK 背压等待都必须卸载出调用线程，
+        // 否则协议线程上会执行宿主代码 / sleep（I4）
         return new EgressRouter(egress.batchSize(), egress.queueCapacity(), egress.overflowPolicy(),
-                egress.blockTimeout(), egress.batchInterval(), sinkList, listenerList, clock);
+                egress.blockTimeout(), egress.batchInterval(), sinkList, listenerList, clock,
+                // 出口不属于某个具体协议，故用框架默认的在途上限（与 AdapterSettings 同口径）
+                new BoundedDeliveryDispatcher(taskScheduler,
+                        DefaultAdapterSettings.DEFAULT_MAX_PENDING_REQUESTS));
     }
 
     /**

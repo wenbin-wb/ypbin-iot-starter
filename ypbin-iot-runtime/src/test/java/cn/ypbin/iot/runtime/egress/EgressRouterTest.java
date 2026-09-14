@@ -25,11 +25,15 @@ import cn.ypbin.iot.core.model.PointValue;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.spi.DataSink;
 import cn.ypbin.iot.core.spi.DeviceEventListener;
+import cn.ypbin.iot.runtime.delivery.BoundedDeliveryDispatcher;
+import cn.ypbin.iot.runtime.scheduler.DefaultTaskScheduler;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +49,55 @@ import org.junit.jupiter.api.Test;
  * @since 2026-09-13
  */
 class EgressRouterTest {
+
+    @Test
+    @DisplayName("EGRESS-08 设备事件必须卸载出调用线程（原实现在调用者线程同步执行宿主回调）")
+    void deviceEventMustBeOffloadedToDispatcher() throws Exception {
+        String caller = Thread.currentThread().getName();
+        List<String> callbackThreads = new CopyOnWriteArrayList<>();
+        CountDownLatch delivered = new CountDownLatch(1);
+        DefaultTaskScheduler taskScheduler = new DefaultTaskScheduler(2, 64);
+        EgressRouter router = new EgressRouter(16, 1000, EgressOverflowPolicy.DROP_OLDEST,
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(),
+                List.of(event -> {
+                    callbackThreads.add(Thread.currentThread().getName());
+                    delivered.countDown();
+                }), Clock.systemUTC(), new BoundedDeliveryDispatcher(taskScheduler, 64));
+        try {
+            router.emit(new DeviceEvent("d1", CODE, DeviceEventType.DEVICE_ONLINE, null, null,
+                    Clock.systemUTC().instant()));
+            assertThat(delivered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(callbackThreads).hasSize(1);
+            assertThat(callbackThreads.get(0))
+                    .as("宿主事件回调不得在调用线程上执行（调用线程=%s）", caller)
+                    .isNotEqualTo(caller);
+        } finally {
+            router.close();
+            taskScheduler.close();
+        }
+    }
+
+    @Test
+    @DisplayName("EGRESS-09 BLOCK 策略不得在调用线程上阻塞（原实现会 sleep 到 blockTimeout）")
+    void blockPolicyMustNotBlockCaller() {
+        DefaultTaskScheduler taskScheduler = new DefaultTaskScheduler(2, 64);
+        // 容量刚好装满，让后续 emit 必须走「等待有位置」的分支
+        EgressRouter router = new EgressRouter(10, 10, EgressOverflowPolicy.BLOCK,
+                Duration.ofSeconds(2), Duration.ofMillis(20), List.of(), List.of(), Clock.systemUTC(),
+                new BoundedDeliveryDispatcher(taskScheduler, 64));
+        try {
+            router.emit(batch("d1", 10));
+            long started = System.nanoTime();
+            router.emit(batch("d1", 10));
+            long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            assertThat(elapsedMillis)
+                    .as("BLOCK 的等待必须卸载出调用线程（实测调用线程阻塞 %d ms）", elapsedMillis)
+                    .isLessThan(500L);
+        } finally {
+            router.close();
+            taskScheduler.close();
+        }
+    }
 
     private static final ProtocolCode CODE = ProtocolCode.of("tck");
 

@@ -16,6 +16,7 @@
 package cn.ypbin.iot.runtime.egress;
 
 import cn.ypbin.iot.core.context.DataEgress;
+import cn.ypbin.iot.core.context.DeliveryDispatcher;
 import cn.ypbin.iot.core.model.DataBatch;
 import cn.ypbin.iot.core.model.DeviceEvent;
 import cn.ypbin.iot.core.model.PointValue;
@@ -87,9 +88,14 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
 
     private final Clock clock;
 
+    /** 宿主回调投递器：设备事件与 BLOCK 背压等待都必须卸载出调用线程。 */
+    private final DeliveryDispatcher delivery;
+
     private final BlockingQueue<DataBatch> queue;
 
     private final AtomicInteger queuedPoints = new AtomicInteger();
+
+    private final AtomicLong droppedEvents = new AtomicLong();
 
     private final AtomicLong droppedPoints = new AtomicLong();
 
@@ -119,6 +125,26 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
     public EgressRouter(int batchSize, int queueCapacityPoints, EgressOverflowPolicy overflowPolicy,
             Duration blockTimeout, Duration batchInterval, List<DataSink> sinks,
             List<DeviceEventListener> listeners, Clock clock) {
+        this(batchSize, queueCapacityPoints, overflowPolicy, blockTimeout, batchInterval, sinks, listeners,
+                clock, null);
+    }
+
+    /**
+     * 创建出口路由器。
+     *
+     * @param batchSize           单批最大点数
+     * @param queueCapacityPoints 队列容量（点数）
+     * @param overflowPolicy      溢出策略
+     * @param blockTimeout        BLOCK 策略的等待上限
+     * @param batchInterval       消费线程 drain 等待窗口
+     * @param sinks               数据出口
+     * @param listeners           设备事件监听器
+     * @param clock               时钟
+     * @param delivery            宿主回调投递器（为 {@code null} 时退化为同步执行）
+     */
+    public EgressRouter(int batchSize, int queueCapacityPoints, EgressOverflowPolicy overflowPolicy,
+            Duration blockTimeout, Duration batchInterval, List<DataSink> sinks,
+            List<DeviceEventListener> listeners, Clock clock, DeliveryDispatcher delivery) {
         this.batchSize = batchSize <= 0 ? 1000 : batchSize;
         this.queueCapacityPoints = queueCapacityPoints <= 0 ? 100_000 : queueCapacityPoints;
         this.overflowPolicy = overflowPolicy == null ? EgressOverflowPolicy.DROP_OLDEST : overflowPolicy;
@@ -133,6 +159,7 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
         this.sinks = sinks == null ? List.of() : List.copyOf(sinks);
         this.listeners = listeners == null ? List.of() : List.copyOf(listeners);
         this.clock = clock == null ? Clock.systemUTC() : clock;
+        this.delivery = delivery;
         this.queue = new LinkedBlockingQueue<>();
         this.dispatcher = Thread.ofPlatform().daemon(true).name("ypbin-iot-egress").unstarted(this::dispatchLoop);
         this.dispatcher.start();
@@ -158,25 +185,76 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
             drop(points, "batch larger than queue capacity");
             return;
         }
+        if (overflowPolicy == EgressOverflowPolicy.BLOCK && !hasRoomFor(points)) {
+            // BLOCK 策略的语义是「不丢，等有位置」——但**不能在有位置之前就阻塞调用线程**：
+            // emit 会在协议线程/BLOCK 调用链上被调用，在这里 sleep 就把背压原样传回了 EventLoop
+            // （正是 I4 要防的事）。因此把「等待 + 入队」整体卸载到投递器执行。
+            Runnable task = () -> {
+                if (reserve(points)) {
+                    queue.add(batch);
+                }
+            };
+            if (delivery != null && delivery.dispatch(task)) {
+                return;
+            }
+            if (delivery == null) {
+                task.run();
+                return;
+            }
+            // 投递器饱和：无法承载等待任务，只能丢弃并计数（绝不静默）
+            drop(points, "backpressure dispatcher saturated");
+            return;
+        }
         if (!reserve(points)) {
             return;
         }
         queue.add(batch);
     }
 
+    private boolean hasRoomFor(int points) {
+        return queuedPoints.get() + points <= queueCapacityPoints;
+    }
+
     @Override
     public void emit(DeviceEvent event) {
         Objects.requireNonNull(event, "event must not be null");
-        // 事件是低频控制面信息，直接投递并做异常隔离，不进数据队列（避免被高频数据挤掉）
-        for (DeviceEventListener listener : listeners) {
-            try {
-                listener.onEvent(event);
-            } catch (RuntimeException ex) {
-                sinkFailures.incrementAndGet();
-                log.error("[ypbin-iot] device event listener {} failed for device {}",
-                        listener.getClass().getName(), event.deviceId(), ex);
+        // 事件是低频控制面信息，不进数据队列（避免被高频数据挤掉）。
+        // 但**必须卸载出调用线程**：本方法会在协议线程上被调用，
+        // 而 onEvent 是任意宿主代码——直接在协议线程执行等于把 I4 防线绕开。
+        Runnable task = () -> {
+            for (DeviceEventListener listener : listeners) {
+                try {
+                    listener.onEvent(event);
+                } catch (RuntimeException ex) {
+                    sinkFailures.incrementAndGet();
+                    log.error("[ypbin-iot] device event listener {} failed for device {}",
+                            listener.getClass().getName(), event.deviceId(), ex);
+                }
             }
+        };
+        if (delivery == null || !delivery.dispatch(task)) {
+            if (delivery == null) {
+                // 未注入投递器（如直接 new 的单元测试）：退化为同步执行并留痕
+                task.run();
+                return;
+            }
+            // 投递器饱和：事件被有界丢弃（已在投递器内计数告警），不能静默
+            dropEvent(event);
         }
+    }
+
+    private void dropEvent(DeviceEvent event) {
+        droppedEvents.incrementAndGet();
+        log.debug("[ypbin-iot] dropped device event for device {} (delivery saturated).", event.deviceId());
+    }
+
+    /**
+     * 累计因投递饱和被丢弃的设备事件数。
+     *
+     * @return 丢弃数
+     */
+    public long droppedEvents() {
+        return droppedEvents.get();
     }
 
     /**
