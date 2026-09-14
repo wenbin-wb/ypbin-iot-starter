@@ -140,4 +140,50 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+                <!--
+                  覆盖率门禁：在父仓 INSTRUCTION ≥ 0.80 之上，本仓**额外**加一条 BRANCH 下限。
+
+                  为什么必须看分支：本仓实证过两次「行覆盖率达标但功能不可用」——
+                  90.5% 行覆盖下藏着「重连只生效一次」「重连阻塞全局定时器」两个 P0，
+                  它们都躺在未被执行的分支里。当前各模块分支覆盖 64.9%~84.3%，
+                  未覆盖的几乎全是并发交错、饱和/关闭边界与幂等分支，正是风险所在。
+
+                  这个 0.64 是**防倒退下限，不是目标**：它只保证「不许再掉」。
+                  各模块当前基线与提额计划见 docs/PROTOCOLS.md（目标统一提到 0.80）。
+                  必须在 execution 级用 combine.self="override" 覆盖：
+                  父仓的 rules 配在 jacoco-check 执行内，插件级 configuration 不生效。
+                -->
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <executions>
+                        <execution>
+                            <id>jacoco-check</id>
+                            <configuration>
+                                <rules combine.self="override">
+                                    <rule>
+                                        <element>BUNDLE</element>
+                                        <limits>
+                                            <limit>
+                                                <counter>INSTRUCTION</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>0.80</minimum>
+                                            </limit>
+                                            <limit>
+                                                <counter>BRANCH</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>0.64</minimum>
+                                            </limit>
+                                        </limits>
+                                    </rule>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+        </plugins>
+    </build>
 </project>
