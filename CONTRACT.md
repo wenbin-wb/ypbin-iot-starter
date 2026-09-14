@@ -34,7 +34,11 @@
    TLS 未实现拒绝；MQTT 5 专属配置拒绝。
 2. **宿主回调不在协议线程上执行**：`DataListener.onData`、`DeviceEventListener.onEvent`
    经 `DeliveryDispatcher` 投递到框架执行器；过载**有界丢弃并计数**，不无限堆积、不阻塞协议线程。
-3. **显式超时**：所有建链与请求都带超时，且库内部超时被设为与配置一致（不存在"两个超时赛跑"）。
+3. **显式超时**：所有建链与请求都必须显式配置超时（`ConnectionSpec.connectTimeout`/`requestTimeout`
+   有非空默认值，且各协议实现都消费它们）。
+   *（OPC UA 另把 Milo 内部的 `connectTimeout`/`acknowledgeTimeout` 接线为同一值，以避免
+   「两个超时赛跑」——该接线已实现，但**尚未有测试能在删除它时变红**，故不计入下面的
+   「有测试支撑」范围。）*
 4. **失败原因可区分**：`probe()` 与失败的 `open()` 带出**真实**消息键，
    不把配置错误折叠成「端点不可达」。
 5. **重连不静默停摆**：连接意外断开按 `reconnect-initial-delay`/`max-delay`/`jitter`

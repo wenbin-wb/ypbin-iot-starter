@@ -50,7 +50,7 @@
 
 1. **协议模块没有配置处理器**：4 个协议模块都用了 `@ConfigurationProperties` 但没有
    `spring-boot-configuration-processor`，宿主的 IDE 对 `ypbin.iot.protocol.*` 的所有配置项
-   **没有任何补全**（不报错、不影响运行，只是静默失去提示）。元数据从 1 模块/19 项 → **5 模块/50 项**。
+   **没有任何补全**（不报错、不影响运行，只是静默失去提示）。元数据从 1 模块/19 项 → **5 模块/51 项**。
 2. **ArchUnit 规则静默跳过 3 个协议模块**：arch-tests 只依赖 `protocol-tcp`，
    而规则用 `importPackages("cn.ypbin.iot")` —— modbus/mqtt/opcua 的字节码**不在 classpath 上**，
    于是「协议实现包不得使用 Spring 类型」这类规则**看起来通过、实则从未检查过它们**。

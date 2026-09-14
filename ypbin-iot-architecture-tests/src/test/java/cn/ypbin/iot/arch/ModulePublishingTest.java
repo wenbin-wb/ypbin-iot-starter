@@ -103,8 +103,27 @@ class ModulePublishingTest {
             return false;
         }
         String content = Files.readString(pom, StandardCharsets.UTF_8);
-        return content.contains("<maven.deploy.skip>true</maven.deploy.skip>")
-                || content.contains("<gpg.skip>true</gpg.skip>");
+        // 不用「裸字符串包含 true」判定：那样 `${...}` 间接引用（如
+        // `<maven.deploy.skip>${iot.skip.publish}</maven.deploy.skip>` + 属性=true）
+        // 会被判成「发布模块」而绕过门禁（复审已用变异验证过这个绕过）。
+        // 改为：只要声明了 deploy.skip/gpg.skip 且值**不是明确的 false**，就按「不发布意图」处理。
+        return skipDeclared(content, "maven.deploy.skip") || skipDeclared(content, "gpg.skip")
+                // central-publishing 插件自身的跳过开关同样是「不发布意图」
+                || skipDeclared(content, "skipPublishing");
+    }
+
+    /** 该 pom 是否声明了某跳过开关且值不是明确的 false。 */
+    private static boolean skipDeclared(String pomContent, String property) {
+        java.util.regex.Matcher matcher = Pattern.compile(
+                "<" + Pattern.quote(property) + ">\\s*([^<]*?)\\s*</" + Pattern.quote(property) + ">")
+                .matcher(pomContent);
+        while (matcher.find()) {
+            String value = matcher.group(1).trim();
+            if (!"false".equalsIgnoreCase(value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Test

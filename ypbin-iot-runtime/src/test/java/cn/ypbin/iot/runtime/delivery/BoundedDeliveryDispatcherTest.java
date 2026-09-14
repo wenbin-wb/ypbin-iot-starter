@@ -141,6 +141,30 @@ class BoundedDeliveryDispatcherTest {
         assertThat(new BoundedDeliveryDispatcher(scheduler, 7).maxInFlight()).isEqualTo(7);
     }
 
+    @Test
+    @DisplayName("DD-06 close 必须有界等待在途宿主回调完成（不是一置位就返回）")
+    void closeMustDrainInFlightCallbacks() throws Exception {
+        // CONTRACT.md 承诺「进程停机时不静默丢在途回调」。原实现只置 closed 就返回，
+        // 在途回调会被随后的调度器 shutdownNow 打断。这条用例钉住 drain 行为：
+        // 删掉 drain 循环（close 立即返回）会让 inFlight 仍为 1，断言失败。
+        BoundedDeliveryDispatcher dispatcher = new BoundedDeliveryDispatcher(scheduler, 16);
+        CountDownLatch started = new CountDownLatch(1);
+        AtomicInteger finished = new AtomicInteger();
+        assertThat(dispatcher.dispatch(() -> {
+            started.countDown();
+            sleepQuietly(300L);
+            finished.incrementAndGet();
+        })).isTrue();
+        assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+        dispatcher.close();
+
+        assertThat(finished)
+                .as("close() 返回时在途回调必须已经跑完（有界等待），否则停机时会把它打断")
+                .hasValue(1);
+        assertThat(dispatcher.inFlight()).isZero();
+    }
+
     private static void awaitUntil(BooleanSupplier condition, Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         while (System.nanoTime() < deadline) {

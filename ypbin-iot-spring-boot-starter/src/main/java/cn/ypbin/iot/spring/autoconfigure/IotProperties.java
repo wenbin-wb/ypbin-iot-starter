@@ -371,6 +371,66 @@ public record IotProperties(
         }
 
         /**
+         * 归一化后的最大连接数。
+         *
+         * <p>组件声明为 {@code @Nullable} 是因为<b>构造参数</b>允许为空（Spring 绑定与
+         * {@code defaults()} 都传空表示「未配置」）；紧凑构造器已归一化为非空，
+         * 因此访问器给出<b>非空契约</b>——否则可空性会扩散到所有使用点
+         * （消费端是 primitive 形参，可空即 unboxing 告警）。</p>
+         *
+         * @return 最大连接数（恒非空）
+         */
+        @Override
+        public Integer maxConnections() {
+            return maxConnections == null || maxConnections <= 0
+                    ? DefaultAdapterSettings.DEFAULT_MAX_CONNECTIONS : maxConnections;
+        }
+
+        /**
+         * 归一化后的单链路在途请求上限。
+         *
+         * @return 在途请求上限（恒非空）
+         */
+        @Override
+        public Integer maxPendingRequests() {
+            return maxPendingRequests == null || maxPendingRequests <= 0
+                    ? DefaultAdapterSettings.DEFAULT_MAX_PENDING_REQUESTS : maxPendingRequests;
+        }
+
+        /**
+         * 归一化后的重连抖动系数。
+         *
+         * @return 抖动系数（恒非空）
+         */
+        @Override
+        public Double reconnectJitter() {
+            return reconnectJitter == null
+                    ? DefaultAdapterSettings.DEFAULT_RECONNECT_JITTER : reconnectJitter;
+        }
+
+        /**
+         * 归一化后的重连初始退避。
+         *
+         * @return 初始退避（恒非空）
+         */
+        @Override
+        public Duration reconnectInitialDelay() {
+            return reconnectInitialDelay == null
+                    ? DefaultAdapterSettings.DEFAULT_RECONNECT_INITIAL_DELAY : reconnectInitialDelay;
+        }
+
+        /**
+         * 归一化后的重连最大退避。
+         *
+         * @return 最大退避（恒非空）
+         */
+        @Override
+        public Duration reconnectMaxDelay() {
+            return reconnectMaxDelay == null
+                    ? DefaultAdapterSettings.DEFAULT_RECONNECT_MAX_DELAY : reconnectMaxDelay;
+        }
+
+        /**
          * 是否启用。
          *
          * @return 启用返回 {@code true}

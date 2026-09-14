@@ -271,6 +271,25 @@ class OpcUaSecurityTest {
                 "-ext", "san=ip:127.0.0.1,uri:urn:ypbin:iot:test-server");
     }
 
+    @Test
+    @DisplayName("SEC-14 开启主机名校验后地址不匹配必须被拒（钉住那个开关真的接线了）")
+    void hostnameMismatchMustBeRejectedWhenEnabled() throws Exception {
+        // SEC-13 曾经是假绿：secured() 的函数体把 verifyHostname 写成了 null，
+        // 「开启」与「关闭」构造出的 properties 逐字段相同 —— 两次断言的是同一件事。
+        Path keyStore = generateKeyStore("client");
+        Path trustDir = exportTrustedCertificate(keyStore, "client");
+        AdapterContext ctx = context(ref -> Optional.of(new CredentialResolver.Credential("u",
+                STORE_PASSWORD.toCharArray(), Map.of())));
+
+        OpcUaSecurity.Material strict = OpcUaSecurity.prepare(
+                secured(keyStore.toString(), trustDir.toString(), null, null, Boolean.TRUE), ctx, "c1");
+        assertThatThrownBy(() -> strict.certificateValidator().validateCertificateChain(
+                List.of(readCertificate(keyStore)), "urn:ypbin:iot:test-server",
+                new String[] {"10.9.9.9"}))
+                .as("开启主机名校验后，地址不在证书 SAN 里就必须被拒 —— 否则这个开关是装饰")
+                .isInstanceOf(Exception.class);
+    }
+
     /**
      * 用给定的扩展参数签发一张自签证书（别名固定 {@code client}）、放进信任目录，断言校验器**拒绝**它。
      *
@@ -317,7 +336,8 @@ class OpcUaSecurityTest {
 
     private static OpcUaProperties secured(String keyStore, String trustDir, String username,
             Boolean trustAll, Boolean verifyHostname) {
-        return new OpcUaProperties(true, POLICY, "SIGN_AND_ENCRYPT", null, null, null, null, null, username, username == null ? null : "opcua-ref", keyStore, STORE_REF, trustDir, trustAll, null);
+        return new OpcUaProperties(true, POLICY, "SIGN_AND_ENCRYPT", null, null, null, null, null, username, username == null ? null : "opcua-ref", keyStore, STORE_REF, trustDir, trustAll,
+                verifyHostname);
     }
 
     private AdapterContext context(CredentialResolver credentials) {

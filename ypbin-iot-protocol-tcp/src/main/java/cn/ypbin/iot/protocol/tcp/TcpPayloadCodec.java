@@ -56,7 +56,9 @@ final class TcpPayloadCodec {
      * @author wenbin
      * @since 2026-09-13
      */
-    record Encoded(@Nullable byte[] payload, @Nullable String messageKey) {
+    // 注意注解位置：`@Nullable byte[]` 注解的是**元素类型**（「元素可空的非空数组」），
+    // 数组本身可空必须写 `byte @Nullable []`（母仓教训十一）。
+    record Encoded(byte @Nullable [] payload, @Nullable String messageKey) {
 
         /**
          * 编码成功。

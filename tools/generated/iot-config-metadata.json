@@ -2,11 +2,11 @@
   "generatedBy": "tools/export-config-metadata.mjs",
   "moduleCount": 5,
   "modules": [
-    "ypbin-iot-spring-boot-starter",
-    "ypbin-iot-protocol-tcp",
     "ypbin-iot-protocol-modbus",
     "ypbin-iot-protocol-mqtt",
-    "ypbin-iot-protocol-opcua"
+    "ypbin-iot-protocol-opcua",
+    "ypbin-iot-protocol-tcp",
+    "ypbin-iot-spring-boot-starter"
   ],
   "propertyCount": 51,
   "properties": [

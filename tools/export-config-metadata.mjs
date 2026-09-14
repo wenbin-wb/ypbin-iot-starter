@@ -8,12 +8,15 @@
  *   ① 给出一份稳定的、机器可读的配置参考（下游工具/文档可直接用）；
  *   ② `--check` 作为漂移门禁：源码改了但没重新生成时构建失败。
  *
+ * 模块清单**自动发现**（扫描构建产物），不硬编码：
+ * 硬编码会让新增模块被静默漏掉，而漂移门禁仍是绿的 ——
+ * 正是本项目反复出问题的「门禁覆盖范围与声称不一致」。
+ *
  * 用法：
  *   node tools/export-config-metadata.mjs          # 生成
  *   node tools/export-config-metadata.mjs --check  # 校验未漂移（CI 用）
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { globSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, globSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,28 +24,26 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outputPath = join(repoRoot, 'tools/generated/iot-config-metadata.json');
 const checkOnly = process.argv.includes('--check');
 
-/** 参与聚合的模块（与 nullaway 门禁的参与模块保持一致） */
-const modules = [
-  'ypbin-iot-core',
-  'ypbin-iot-runtime',
-  'ypbin-iot-transport',
-  'ypbin-iot-spring-boot-starter',
-  'ypbin-iot-protocol-tcp',
-  'ypbin-iot-protocol-modbus',
-  'ypbin-iot-protocol-mqtt',
-  'ypbin-iot-protocol-opcua',
-];
+const metadataFiles = globSync(
+  'ypbin-iot-*/target/classes/META-INF/spring-configuration-metadata.json',
+  { cwd: repoRoot },
+).sort();
 
-const properties = [];
+if (metadataFiles.length === 0) {
+  console.error(
+    '[config-metadata] 没有找到任何模块的配置元数据 —— 请先执行 `mvn -DskipTests compile`。\n'
+    + '  （不生成空文件：那会让漂移门禁变成永远通过的假门禁）',
+  );
+  process.exit(1);
+}
+
 const modulesWithMetadata = [];
+const properties = [];
 
-for (const module of modules) {
-  const file = join(repoRoot, module, 'target/classes/META-INF/spring-configuration-metadata.json');
-  if (!existsSync(file)) {
-    continue;
-  }
+for (const relative of metadataFiles) {
+  const module = relative.split('/')[0];
   modulesWithMetadata.push(module);
-  const parsed = JSON.parse(readFileSync(file, 'utf8'));
+  const parsed = JSON.parse(readFileSync(join(repoRoot, relative), 'utf8'));
   for (const property of parsed.properties ?? []) {
     properties.push({
       name: property.name,
@@ -53,14 +54,6 @@ for (const module of modules) {
       module,
     });
   }
-}
-
-if (modulesWithMetadata.length === 0) {
-  console.error(
-    '[config-metadata] 没有找到任何模块的配置元数据 —— 请先执行 `mvn -DskipTests compile`。'
-    + '（不生成空文件：那会让漂移门禁变成永远通过的假门禁）',
-  );
-  process.exit(1);
 }
 
 // 稳定排序：否则 Maven 模块顺序变化会造成无意义的 diff
@@ -81,8 +74,7 @@ if (checkOnly) {
     console.error(`[config-metadata] 缺少 ${outputPath} —— 请执行 node tools/export-config-metadata.mjs`);
     process.exit(1);
   }
-  const current = readFileSync(outputPath, 'utf8');
-  if (current !== serialized) {
+  if (readFileSync(outputPath, 'utf8') !== serialized) {
     console.error(
       '[config-metadata] 配置元数据已漂移：源码变更后未重新生成。\n'
       + '  请执行：node tools/export-config-metadata.mjs 并提交结果。',

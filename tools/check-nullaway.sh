@@ -27,6 +27,20 @@ MODULES=(
 )
 LIST="$(IFS=,; echo "${MODULES[*]}")"
 LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
+
+# 父 pom 是 3.1.0-SNAPSHOT：~/.m2 里可能是**旧的快照**，那样门禁会用旧分析器跑出假绿
+# （真实发生过：旧快照是 NullAway 0.11.3，而声明版本是 0.14.1，前者把 4 处违规放过去了）。
+# 因此这里把「实际生效的分析器版本」打印出来，并在父 pom 未安装时显式失败。
+PARENT_VERSION="$(grep -oP '(?<=<version>)[^<]+' <<< "$(sed -n '/<parent>/,/<\/parent>/p' pom.xml)" | head -1)"
+PARENT_POM="${HOME}/.m2/repository/cn/ypbin/ypbin-starter-dependencies/${PARENT_VERSION}/ypbin-starter-dependencies-${PARENT_VERSION}.pom"
+if [ ! -f "$PARENT_POM" ]; then
+  echo "[nullaway] 失败：本地仓库没有父 pom ${PARENT_VERSION}" >&2
+  echo "  请先安装母仓：cd ../ypbin-starter && mvn -pl ypbin-starter-dependencies install -DskipTests" >&2
+  exit 1
+fi
+ANALYZER_VERSION="$(grep -oP '(?<=<nullaway.version>)[^<]+' "$PARENT_POM" | head -1)"
+echo "[nullaway] 父 pom ${PARENT_VERSION} · NullAway ${ANALYZER_VERSION:-未知} · Error Prone $(grep -oP '(?<=<error-prone.version>)[^<]+' "$PARENT_POM" | head -1)"
 
 echo "[nullaway] 参与模块（${#MODULES[@]} 个）：${LIST}"
 set +e
@@ -63,4 +77,3 @@ if [ "$STATUS" -ne 0 ]; then
 fi
 
 echo "[nullaway] 通过：${#MODULES[@]} 个模块均实际编译，0 违规"
-rm -f "$LOG"

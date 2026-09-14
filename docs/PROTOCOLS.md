@@ -1566,7 +1566,7 @@ quarantine, new TestCertificateGroup(...)))` 提供 —— **stack-core 没有�
 | 发布/协作基础设施 | `LICENSE`、`CHANGELOG.md`、`CONTRACT.md`（稳定面/不承诺面/**有测试支撑的行为承诺**/明确不做的）、`CONTRIBUTING.md`、`RELEASING.md`、`ROADMAP.md` |
 | CI | `ci.yml`（全量 clean test + NullAway + 依赖收敛 + 元数据漂移 + SBOM）、`codeql.yml`、`release.yml`（默认 dry-run） |
 | 发布工程 | 根 pom 的 `release` profile（GPG + central-publishing）；`dev-only` profile 承载非发布模块；`ModulePublishingTest` 守边界。**已实测**：`-Prelease` 反应堆为 12 个模块、不含架构测试 |
-| NullAway | 8 个模块全部纳入、**0 违规**；`tools/check-nullaway.sh` 自带「门禁是否真的执行过」自检 |
+| NullAway | 8 个模块全部纳入、**0 违规**（用母仓 master 的父 pom：NullAway 0.14.1 + EP 2.50.0）；`tools/check-nullaway.sh` 自带「门禁是否真的执行过」自检，并打印实际生效的分析器版本 |
 | 工具链 | `check-nullaway.sh`、`export-config-metadata.mjs`（聚合 + 漂移门禁）、`preflight.sh` |
 | 遗留项 | OPC UA **用户名令牌端到端已打通**（`SEC-E2E-02` + 反向用例 `SEC-E2E-03`）；`HOSTNAME` 校验改为**可选开关**（默认关） |
 

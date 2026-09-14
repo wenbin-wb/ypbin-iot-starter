@@ -21,6 +21,11 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v5
+        with:
+          # 必须拉全量历史与 tag：否则 `git rev-parse vX` 必然失败，
+          # 「tag 已存在」的校验会永远走不到报错分支（等于空转）。
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: 校验 pom revision 与输入版本一致
         run: |
