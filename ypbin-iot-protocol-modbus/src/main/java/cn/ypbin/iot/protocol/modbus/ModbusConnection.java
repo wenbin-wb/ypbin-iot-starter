@@ -25,8 +25,10 @@ import cn.ypbin.iot.core.model.Endpoint;
 import cn.ypbin.iot.core.model.SessionState;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
+import cn.ypbin.iot.core.util.Stages;
 import cn.ypbin.iot.runtime.subscription.PollingSubscriptionManager;
 import com.digitalpetri.modbus.client.ModbusClient;
+import com.digitalpetri.modbus.exceptions.ModbusResponseException;
 import com.digitalpetri.modbus.pdu.ReadHoldingRegistersRequest;
 import java.time.Duration;
 import java.time.Instant;
@@ -122,11 +124,20 @@ final class ModbusConnection implements ProtocolConnection {
                 .toCompletableFuture()
                 .orTimeout(Math.max(1L, keepAliveProbeTimeout.toMillis()), TimeUnit.MILLISECONDS)
                 .whenComplete((response, error) -> {
-                    if (error != null) {
-                        log.warn("[ypbin-iot] modbus connection {} failed keep-alive probe; "
-                                + "treating as dead so the registry can reconnect", connectionId(), error);
-                        onConnectionLost(error);
+                    if (error == null) {
+                        return;
                     }
+                    // 关键：异常响应（ModbusResponseException，如未映射地址回异常码 02）本身就是
+                    // 「对端活着并在应答」的证据。把它当成链路死亡会误杀健康设备：
+                    // 会话被关闭、订阅被取消、采集永久停止——比不探测更糟。
+                    if (Stages.unwrap(error) instanceof ModbusResponseException) {
+                        log.debug("[ypbin-iot] modbus connection {} answered keep-alive with an "
+                                + "exception response; link is alive", connectionId());
+                        return;
+                    }
+                    log.warn("[ypbin-iot] modbus connection {} failed keep-alive probe; "
+                            + "treating as dead so the registry can reconnect", connectionId(), error);
+                    onConnectionLost(error);
                 });
     }
 
@@ -230,6 +241,16 @@ final class ModbusConnection implements ProtocolConnection {
             keepAliveTask.cancel();
         }
         polling.close();
+        // 必须主动断开：close() 因 closed 已置位会直接 return，
+        // 不在这里断开就会永久泄漏底层 channel 与 ModbusClient
+        if (client.isConnected()) {
+            client.disconnectAsync().whenComplete((ignored, error) -> {
+                if (error != null) {
+                    log.error("[ypbin-iot] failed to disconnect lost modbus connection {}",
+                            connectionId(), error);
+                }
+            });
+        }
         sessions.values().forEach(ModbusSession::onConnectionClosed);
         closeReason.complete(new CloseReason(cause == null ? CloseCause.REMOTE_CLOSED : CloseCause.TRANSPORT_ERROR,
                 "", cause, Instant.now()));

@@ -166,6 +166,11 @@ public final class ConnectionRegistry implements AutoCloseable {
         }
         long startedNanos = System.nanoTime();
         while (true) {
+            // 已关闭时立即中止等待：否则 closeAll 的快照里那些未完成的 fresh
+            // 要等这里拿到令牌才会完成，停机被拖 ≈ N/R 秒（实测 6 并发/2 每秒即 2.8s）
+            if (closed) {
+                return -1L;
+            }
             refillTokens();
             long current = availableTokens.get();
             if (current >= TOKEN_SCALE && availableTokens.compareAndSet(current, current - TOKEN_SCALE)) {
@@ -208,7 +213,14 @@ public final class ConnectionRegistry implements AutoCloseable {
         // 必须把 min 的结果写回：原实现把 Math.min 的结果丢弃，只有溢出为负时才回写，
         // 于是桶的容量实际上没有上限 —— 空闲 5s 就能攒出 10 倍于配置速率的令牌，
         // 限速闸门在「启动风暴」这个唯一目标场景下完全失效。
-        availableTokens.updateAndGet(current -> Math.min(capacity, current + refill));
+        availableTokens.updateAndGet(current -> {
+            long updated = current + refill;
+            if (updated < 0L) {
+                // 极端溢出保护：宁可回到满桶（限速偏松）也不能留下永久为负的桶（取令牌死循环）
+                return capacity;
+            }
+            return Math.min(capacity, updated);
+        });
     }
 
     private static void sleepQuietly(long millis) {

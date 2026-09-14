@@ -245,7 +245,7 @@ final class ModbusSession implements DeviceSession {
                     collected.put(entry.getKey(), PointValue.good(entry.getKey(), value,
                             context.clock().instant()));
                 }
-                if (packed.length < expectedBytes) {
+                if (packed != null && packed.length < expectedBytes) {
                     context.metrics().recordError(ModbusAdapter.MSG_RESPONSE_TOO_SHORT);
                 }
                 return null;

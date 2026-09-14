@@ -390,6 +390,42 @@ class ModbusEdgeCaseTest {
         assertThatThrownBy(() -> WriteRequest.of()).isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    @DisplayName("MBE-16 保活探针收到异常响应不得判死（异常响应也是「对端活着」）")
+    void keepAliveMustNotKillHealthyDeviceOnExceptionResponse() throws Exception {
+        // 真实 PLC 对未映射地址回异常码 02 是常态。若把异常响应当成链路死亡，
+        // 健康设备会被下线：会话关闭、订阅取消、采集永久停止——比不探测更糟。
+        server.denyRegister(UNIT_A, 0);
+        DefaultTaskScheduler shortScheduler = new DefaultTaskScheduler(2, 64);
+        AdapterContext keepAliveContext = new DefaultAdapterContext(ModbusAdapter.PROTOCOL_CODE,
+                new DefaultAdapterSettings(true, Duration.ofMillis(200), Duration.ofSeconds(2),
+                        Duration.ofSeconds(2), Duration.ofSeconds(2), Duration.ofMillis(100), 0.0D, 64, 64,
+                        Map.of()),
+                new NoopEgress(), shortScheduler, NoopMetricsRecorder.INSTANCE,
+                new EnvCredentialResolver(), Clock.systemUTC(), 32);
+        ProtocolConnection connection = adapter.open(tcpSpec("keepalive"), keepAliveContext)
+                .toCompletableFuture().orTimeout(5, TimeUnit.SECONDS).join();
+        try {
+            DeviceSession session = adapter.bind(connection, device(UNIT_A), keepAliveContext)
+                    .toCompletableFuture().join();
+            server.setRegister(UNIT_A, 100, 42);
+            // 等保活探针至少跑一轮（探针读 holding:0，该地址被标记为未映射）
+            Thread.sleep(600L);
+            assertThat(connection.state().isUsable())
+                    .as("对端回异常响应证明它活着，不得据此判死链路")
+                    .isTrue();
+            assertThat(session.ping().toCompletableFuture().join().alive()).isTrue();
+            ReadResult after = session.read(ReadRequest.of(PointAddress.of("holding:100")))
+                    .toCompletableFuture().join();
+            assertThat(after.values().get(0).value())
+                    .as("判死会导致会话关闭、采集停止；这里必须仍能读到数据")
+                    .isEqualTo(42);
+        } finally {
+            connection.close();
+            shortScheduler.close();
+        }
+    }
+
     private ProtocolConnection openConnection() {
         return adapter.open(tcpSpec("edge"), context).toCompletableFuture()
                 .orTimeout(5, TimeUnit.SECONDS).join();

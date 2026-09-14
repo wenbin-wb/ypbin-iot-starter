@@ -58,6 +58,9 @@ final class ModbusTcpTestServer implements AutoCloseable {
 
     private final AtomicBoolean running = new AtomicBoolean(true);
 
+    /** 被视为「未映射」的寄存器偏移：读它们回异常码 02（真实 PLC 的常见形态）。 */
+    private final java.util.Set<String> unmappedRegisters = ConcurrentHashMap.newKeySet();
+
     private ServerSocket serverSocket;
 
     private Thread acceptThread;
@@ -81,6 +84,16 @@ final class ModbusTcpTestServer implements AutoCloseable {
      */
     void setRegister(int unitId, int offset, int value) {
         registers.computeIfAbsent(unitId, ignored -> new ConcurrentHashMap<>()).put(offset, value);
+    }
+
+    /**
+     * 把某个寄存器标记为「未映射」，读它回异常码 02。
+     *
+     * @param unitId 从站地址
+     * @param offset 偏移
+     */
+    void denyRegister(int unitId, int offset) {
+        unmappedRegisters.add(unitId + ":" + offset);
     }
 
     /**
@@ -185,6 +198,11 @@ final class ModbusTcpTestServer implements AutoCloseable {
         int quantity = readUnsignedShort(pdu, 3);
         if (quantity <= 0 || quantity > ModbusRegisterType.MAX_REGISTER_QUANTITY) {
             return exception(0x03, EXCEPTION_ILLEGAL_DATA_ADDRESS);
+        }
+        for (int index = 0; index < quantity; index++) {
+            if (unmappedRegisters.contains(unitId + ":" + (start + index))) {
+                return exception(0x03, EXCEPTION_ILLEGAL_DATA_ADDRESS);
+            }
         }
         ConcurrentMap<Integer, Integer> map = registers.getOrDefault(unitId, new ConcurrentHashMap<>());
         byte[] response = new byte[2 + quantity * 2];

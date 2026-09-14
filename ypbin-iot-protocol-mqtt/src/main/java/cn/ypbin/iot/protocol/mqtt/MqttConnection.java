@@ -160,6 +160,13 @@ final class MqttConnection implements ProtocolConnection {
         }
         state = SessionState.FAILED;
         sessions.values().forEach(MqttSession::onConnectionClosed);
+        // 必须主动断开：close() 因 closed 已置位会直接 return，
+        // 不断开则 HiveMQ 的 automaticReconnect 会让这个已无人持有的客户端永远重连（重连风暴 + FD 泄漏）
+        client.disconnect().whenComplete((ignored, error) -> {
+            if (error != null) {
+                log.error("[ypbin-iot] failed to disconnect lost mqtt connection {}", connectionId(), error);
+            }
+        });
         closeReason.complete(new CloseReason(cause == null ? CloseCause.REMOTE_CLOSED : CloseCause.TRANSPORT_ERROR,
                 "", cause, Instant.now()));
     }

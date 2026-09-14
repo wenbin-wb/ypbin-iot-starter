@@ -36,6 +36,7 @@ import cn.ypbin.iot.core.model.SubscriptionHandle;
 import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
 import cn.ypbin.iot.core.protocol.DeviceSession;
+import cn.ypbin.iot.core.util.Stages;
 import com.hivemq.client.mqtt.datatypes.MqttQos;
 import com.hivemq.client.mqtt.mqtt3.message.publish.Mqtt3Publish;
 import java.nio.charset.StandardCharsets;
@@ -289,7 +290,10 @@ final class MqttSession implements DeviceSession {
         }
         chain.whenComplete((ignored, error) -> {
             if (error != null) {
-                result.completeExceptionally(error);
+                // 必须回滚已成功的过滤器：否则它们已在 broker 侧生效并持续投递，
+                // 而宿主被告知"订阅失败"且拿不到任何句柄去取消（僵尸订阅）
+                rollback(subscription, filters);
+                result.completeExceptionally(Stages.unwrap(error));
                 return;
             }
             subscriptions.put(subscription.subscriptionId(), subscription);
@@ -298,6 +302,26 @@ final class MqttSession implements DeviceSession {
             result.complete(subscription);
         });
         return result;
+    }
+
+    /**
+     * 回滚一次失败订阅中已经生效的过滤器。
+     *
+     * <p>逐个 UNSUBSCRIBE，失败只记日志：回滚本身失败不应掩盖原始失败原因。</p>
+     */
+    private void rollback(Subscription subscription, List<String> filters) {
+        subscription.active.set(false);
+        for (String filter : filters) {
+            connection.client().unsubscribeWith()
+                    .topicFilter(filter)
+                    .send()
+                    .orTimeout(requestTimeoutMillis(), TimeUnit.MILLISECONDS)
+                    .exceptionally(error -> {
+                        log.warn("[ypbin-iot] failed to roll back subscription of {} on {}",
+                                subscription.subscriptionId(), filter, error);
+                        return null;
+                    });
+        }
     }
 
     /**
