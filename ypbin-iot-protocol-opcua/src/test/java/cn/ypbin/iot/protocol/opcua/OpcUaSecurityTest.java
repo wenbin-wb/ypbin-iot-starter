@@ -193,10 +193,11 @@ class OpcUaSecurityTest {
                 .doesNotThrowAnyException();
 
         // 未受信证书必须被拒——否则「信任列表」形同虚设，等于中间人可任意替换服务端
+        // 必须钉住**拒绝原因**：只断言「抛了某个 Exception」会让任何异常（含 NPE）都算通过
         assertThatThrownBy(() -> validator.validateCertificateChain(List.of(untrustedCert),
                 "urn:ypbin:iot:test-server", new String[] {"127.0.0.1"}))
-                .as("未受信证书必须被拒，否则信任列表是装饰")
-                .isInstanceOf(Exception.class);
+                .as("未受信证书必须因「找不到可信路径」被拒，否则信任列表是装饰")
+                .hasMessageContaining("unable to find valid certification path");
     }
 
     @Test
@@ -213,6 +214,65 @@ class OpcUaSecurityTest {
                         "urn:whatever", new String[] {"10.0.0.1"}))
                 .as("trust-all 必须放行任意服务端证书（仅开发用途）")
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("SEC-10 证书缺 KeyUsage 的 nonRepudiation 必须被拒（规范要求，不是可选）")
+    void missingNonRepudiationMustBeRejected() throws Exception {
+        // 企业 PKI 里常见只签 digitalSignature+keyEncipherment 的证书；OPC UA 要求更多。
+        // 这条负向用例与 SEC-12/SEC-13 一起，使「四项 checks」真的被门禁覆盖 ——
+        // 复审曾用变异测试证明：把 checks 改成 Set.of()（等于全删）后，原有用例仍 9/9 全绿。
+        assertRejectedFor("ku=digitalSignature,keyEncipherment",
+                "-ext", "eku=clientAuth,serverAuth",
+                "-ext", "san=ip:127.0.0.1,uri:urn:ypbin:iot:test-server");
+    }
+
+    @Test
+    @DisplayName("SEC-11 证书 SAN 缺匹配 URI 必须被拒（APPLICATION_URI 校验生效）")
+    void missingApplicationUriMustBeRejected() throws Exception {
+        assertRejectedFor("ku=digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment,"
+                        + "keyCertSign,cRLSign",
+                "-ext", "eku=clientAuth,serverAuth",
+                "-ext", "san=ip:127.0.0.1");
+    }
+
+    @Test
+    @DisplayName("SEC-12 自签证书缺 keyCertSign 必须被拒（自签作锚时的额外要求）")
+    void selfSignedWithoutKeyCertSignMustBeRejected() throws Exception {
+        assertRejectedFor("ku=digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment",
+                "-ext", "eku=clientAuth,serverAuth",
+                "-ext", "san=ip:127.0.0.1,uri:urn:ypbin:iot:test-server");
+    }
+
+    /**
+     * 用给定的扩展参数签发一张自签证书（别名固定 {@code client}）、放进信任目录，断言校验器**拒绝**它。
+     *
+     * @param kuValue  keytool 的 {@code -ext} 取值（形如 {@code ku=digitalSignature,...}）
+     * @param extraExt 其余 {@code -ext} 参数（按 {@code -ext, value} 成对给出）
+     */
+    private void assertRejectedFor(String kuValue, String... extraExt) throws Exception {
+        Path keyStore = tempDir.resolve("variant-" + java.util.UUID.randomUUID() + ".p12");
+        Path trustDir = Files.createDirectories(tempDir.resolve("trusted-" + java.util.UUID.randomUUID()));
+        java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of(
+                "-genkeypair", "-alias", "client", "-keyalg", "RSA", "-keysize", "2048",
+                "-validity", "365", "-dname", "CN=ypbin-test", "-keystore", keyStore.toString(),
+                "-storetype", "PKCS12", "-storepass", STORE_PASSWORD, "-keypass", STORE_PASSWORD,
+                "-ext", kuValue));
+        java.util.Collections.addAll(args, extraExt);
+        runKeytool(args.toArray(new String[0]));
+        runKeytool("-exportcert", "-alias", "client", "-keystore", keyStore.toString(),
+                "-storepass", STORE_PASSWORD, "-rfc",
+                "-file", trustDir.resolve("client.pem").toString());
+
+        OpcUaSecurity.Material material = OpcUaSecurity.prepare(
+                secured(keyStore.toString(), trustDir.toString(), null, null),
+                context(ref -> Optional.of(new CredentialResolver.Credential("u",
+                        STORE_PASSWORD.toCharArray(), Map.of()))), "c1");
+        X509Certificate certificate = readCertificate(keyStore);
+        assertThatThrownBy(() -> material.certificateValidator().validateCertificateChain(
+                List.of(certificate), "urn:ypbin:iot:test-server", new String[] {"127.0.0.1"}))
+                .as("不合规的证书必须被拒；若通过说明对应的检查项没生效（变异测试可复现）")
+                .isInstanceOf(Exception.class);
     }
 
     private X509Certificate readCertificate(Path keyStore) throws Exception {

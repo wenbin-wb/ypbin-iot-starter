@@ -1432,7 +1432,7 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 |---|---|---|---|
 | 1 | `Bad_CertificateUseNotAllowed: KeyUsage extension not found` | `keytool -genkeypair` 默认**既无 KeyUsage 也无 EKU** 扩展 | 签发时必须显式：`-ext ku=... -ext eku=clientAuth,serverAuth` |
 | 2 | `required KeyUsage 'nonRepudiation' not found` | OPC UA 规范要求应用实例证书含 `nonRepudiation` | KeyUsage 至少含 `digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment` |
-| 3 | `required KeyUsage 'keyCertSign' not found` | **自签证书放进信任列表时会被按信任锚（CA）校验** | 自签锚需追加 `keyCertSign,cRLSign`；生产环境应改用「CA 签发叶子证书」 |
+| 3 | `required KeyUsage 'keyCertSign' not found` | **Milo 的终端实体校验对「自签」证书额外要求 keyCertSign**（`CertificateValidationUtil.checkEndEntityKeyUsage`；不是「被当成 CA 校验」——复审已用「同一 KU 集合的 CA 签发叶子能通过」证伪了原解释） | 自签证书需追加 `keyCertSign`（`cRLSign` 不会被任何检查读取，可省） |
 | 4 | `Bad_CertificateUriInvalid` | 保留了 `APPLICATION_URI` 校验，而证书 SAN 里没有对应 URI | 证书 SAN 需含 `uri:<application-uri>`（与 `OpcUaServerConfig.applicationUri` 一致） |
 
 完整可用的签发命令（测试与服务端配置即用此）：
@@ -1448,7 +1448,24 @@ keytool -genkeypair -alias client -keyalg RSA -keysize 2048 -validity 365 \
 
 > **第 3 条是这一轮最重要的发现**：它说明「自签证书直接丢进信任目录」在 OPC UA 里
 > 会让该证书被当作 CA 校验，因此对 KeyUsage 的要求比普通终端实体更严。
-> 生产环境正确做法是 **CA 签发叶子证书**，信任目录只放 CA（或只放叶子做精确 pin）。
+**F1 更正（复审实测证伪了我原来的说法）**：我原先写「信任目录只放叶子做精确 pin」，
+这对 **CA 签发的叶子是错的**——`OpcUaSecurity` 只调 `addTrustedCertificate`，而 Milo 的
+`buildTrustedCertPath` **只把自签证书当作信任锚**；把一张 CA 签发的叶子单独放进信任目录会得到
+`the trustAnchors parameter must be non-empty`，**根本连不上**。准确的部署含义是：
+
+| 信任目录内容 | 效果 | 安全含义 |
+|---|---|---|
+| **自签叶子**（服务端自签） | 可用 | **精确 pin**：替换证书必须拿到该私钥 |
+| **CA**（服务端用 CA 签发） | 可用 | 信任该 CA 签发的**任意** serverAuth 证书 → 持有该 CA 签发的其它证书者可 MITM（复审场景 S8 实测成立） |
+| **CA 签发的叶子** | **不可用** | 锚集为空，直接失败 |
+
+即：**只有「自签叶子」才是精确 pin**；一旦改用 CA 签发，就必然退化为「信任整个 CA」。
+这是当前实现的能力边界，不是配置技巧问题。
+
+**F14（复审提出，未修）**：`APPLICATION_URI` 与 `HOSTNAME` 的比对值都取自**服务端自己
+GetEndpoints 返回的端点描述**（Milo 客户端侧唯一带非 null 参数的调用在 CreateSession），
+因此对**主动 MITM 无防护**（攻击者证书与自身宣告自洽），只对「诚实但配错」的服务端产生拒绝；
+代价是「同一张证书用于多台设备且各设备宣告不同 ApplicationUri」时会误拒。
 > 这也再次印证第七轮审核的提醒：**信任目录里放 CA 会让该 CA 签发的任意主体证书通过校验**——
 > 放叶子是精确 pin，放 CA 是信任整个 CA，两者安全含义完全不同，部署时必须明确选择。
 
@@ -1457,7 +1474,7 @@ keytool -genkeypair -alias client -keyalg RSA -keysize 2048 -validity 365 \
 | 项 | 内容 |
 |---|---|
 | probe 配置错误用例 | `MBE-PROBE-CFG`：配未实现的 TLS 时，`failureReason` 必须**不是** `MSG_CONNECTION_INACTIVE` —— 这是上一轮「probe 不再折叠原因」改动的正面验证（此前 5 处 probe 调用没有一处探测配置错误） |
-| 分支余量 | modbus **64.9% → 70.7%**（+6.7%）、transport **64.2% → 68.9%**（+4.9%）|
+| 分支余量 | modbus **64.9% → 70.7%**（+6.7%）、transport **64.2% → 68.9%**（+4.9%）。**归因更正（复审逐行核对）**：modbus 的 +13 条分支来自 `ModbusSession`（类型派发 2 条、异常侧 2 条、「全坏但链路可用」守卫 2 条、`markChunkFailed` 内部 5 条）与 `ModbusRegisterType`（2 条），**`MBE-CONN` 贡献 0 条分支**（它只提升指令覆盖 81.3%→86.0%）；transport 的 +5 条全部来自 `FramingSpec`（输入校验 4 条 + `equals` 短路 1 条）|
 | MetricsRecorder 契约 | `docs/SPI.md` 写明：**本接口在协议线程上被同步调用，实现必须非阻塞**；严禁网络/磁盘/取锁，需异步则在实现内部投递到有界队列 |
 
 **当前分支余量（相对 0.64 下限）**：mqtt +20.3 / tcp +14.9 / **modbus +6.7** / runtime +5.6 / **transport +4.9** / opcua +3.3 / starter +3.3 / core +2.4。

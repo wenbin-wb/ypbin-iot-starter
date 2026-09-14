@@ -18,13 +18,11 @@ package cn.ypbin.iot.core.context;
 import java.time.Duration;
 
 /**
- * 指标埋点门面。
+ * 指标埋点门面。core 零 Spring 依赖（刻意不暴露 Micrometer 类型）。
  *
- * <p>刻意不暴露 Micrometer 类型：core 零 Spring 依赖，且指标后端可替换。
- * Spring 环境下由 starter 桥接到 Micrometer，非 Spring 环境为无操作实现。</p>
- *
- * @author wenbin
- * @since 2026-09-13
+ * <p><b>实现约束：方法会在共享 IO 线程（Netty event loop）、协议库回调线程（HiveMQ / Milo 共享
+ * 执行器 / digitalpetri）、框架调度器线程或调用方线程上被同步调用，实现必须非阻塞。</b>
+ * 严禁网络调用、磁盘写入或获取锁；需要异步上报时请在实现内部投递到有界队列并计数丢弃。</p>
  */
 public interface MetricsRecorder {
 

@@ -203,8 +203,9 @@ final class OpcUaSecurity {
         // 证书缺 KeyUsage 或 EKU 扩展时本连接就不该建立。
         // （注：`keytool -genkeypair` 的默认产物**两个扩展都没有**，用它会直接报
         //  `Bad_CertificateUseNotAllowed: KeyUsage extension not found` ——
-        //  这不是框架太严，而是该证书本身不合规；签发时必须显式带上
-        //  `-ext ku=digitalSignature,keyEncipherment -ext eku=clientAuth,serverAuth`。）
+        //  这不是框架太严，而是该证书本身不合规。**完整的可用签发参数**见 PROTOCOLS.md；
+        //  要点是 KeyUsage 必须含 `nonRepudiation`（只带 digitalSignature+keyEncipherment 会被拒），
+        //  自签证书还需 `keyCertSign`，且 SAN 必须含与服务端 declaration 一致的 `uri:`。）
         //
         // 唯一有意放宽的是 **HOSTNAME**：现场服务器证书的 CN/SAN 常与配置的 host 不一致
         // （IP 直连尤其常见），保留它会让大量可用的现场设备连不上。

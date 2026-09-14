@@ -771,18 +771,22 @@ public interface ResourceRegistry {
 
 ```java
 /**
- * 指标埋点门面。Spring 环境桥接 Micrometer，非 Spring 环境为无操作实现。
+ * 指标埋点门面。core 零 Spring 依赖（刻意不暴露 Micrometer 类型），默认由 starter 提供无操作实现。
  *
- * <p>刻意不暴露 Micrometer 类型：core 零 Spring 依赖，且指标后端可替换。</p>
- */
-/**
- * 指标埋点门面。
+ * <p><b>实现约束：本接口的方法会在下列线程上被<b>同步</b>调用，实现必须非阻塞。</b>
+ * 实测的调用点落点有四类：</p>
+ * <ul>
+ *   <li><b>共享 IO 线程</b>——iot-transport 的 Netty event loop（写完成回调）</li>
+ *   <li><b>协议库回调线程</b>——MQTT 的 HiveMQ 回调线程、OPC UA 的 Milo 共享执行器、
+ *       Modbus 的 digitalpetri 完成线程</li>
+ *   <li><b>框架调度器线程</b>——轮询订阅的定时器线程</li>
+ *   <li><b>调用方线程</b>——宿主直接调 read/write 时同步内联</li>
+ * </ul>
  *
- * <p><b>实现约束：本接口的方法在协议线程上被同步调用，实现必须是非阻塞的。</b>
- * 典型实现只做原子计数或写入 Micrometer 的计数器；<b>严禁</b>在这里做网络调用、
- * 磁盘写入或获取锁——一次阻塞就会拖住整条链路（同 JVM 内的一条 Modbus 网关上可能挂 200 个从站）。</p>
- *
- * <p>需要异步上报时，请在实现内部投递到自己的有界队列并计数丢弃，不要在本接口的调用点等待。</p>
+ * <p>其中<b>共享 IO 线程最危险</b>：一次阻塞会波及同 JVM 内的其它链路
+ * （一条 Modbus 网关上可能挂 200 个从站，Milo 的执行器被同 JVM 所有 OPC UA 连接复用）。
+ * 因此<b>严禁</b>在这里做网络调用、磁盘写入或获取锁；典型实现只做原子计数或写 Micrometer 计数器。
+ * 需要异步上报时，请在实现内部投递到自己的有界队列并计数丢弃，不要在本接口的调用点等待。</p>
  */
 public interface MetricsRecorder {
 

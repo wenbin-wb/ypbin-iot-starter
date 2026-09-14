@@ -15,9 +15,13 @@
  */
 package cn.ypbin.iot.protocol.tcp;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.Endpoint;
+import cn.ypbin.iot.core.model.ProbeResult;
+import cn.ypbin.iot.core.model.TlsOptions;
 import cn.ypbin.iot.core.protocol.ProtocolAdapter;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.test.tck.AbstractProtocolAdapterTckTest;
@@ -30,7 +34,10 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 
 /**
  * TCP 透传适配器的 TCK 一致性测试。
@@ -147,5 +154,33 @@ class TcpAdapterTckTest extends AbstractProtocolAdapterTckTest {
                 throw new IllegalStateException("failed to close echo server", ex);
             }
         }
+    }
+
+    @Test
+    @DisplayName("TCP-PROBE-CFG probe 必须带出**配置错误**的真实原因，而不是折叠成「链路不可用」")
+    void probeMustSurfaceConfigurationErrors() {
+        // TCP 是第四个协议：此前「不再折叠失败原因」的修复漏了它（复审实测确证），
+        // 于是「配了未实现的 TLS」在这里仍被报成「链路不可用」，排查方向被引向网络。
+        ConnectionSpec tlsSpec = new ConnectionSpec("probe-tls", TcpAdapter.PROTOCOL_CODE,
+                Endpoint.of("tcp://127.0.0.1:1"), Duration.ofSeconds(2), Duration.ofSeconds(2),
+                TlsOptions.enabledDefault(), null, Map.of());
+        ProbeResult tlsResult = adapter.probe(tlsSpec, context()).toCompletableFuture()
+                .orTimeout(15, TimeUnit.SECONDS).join();
+        assertThat(tlsResult.reachable()).isFalse();
+        assertThat(tlsResult.failureReason())
+                .as("TLS 未实现属配置错误，必须原样带出")
+                .isNotEqualTo(TcpAdapter.MSG_CONNECTION_INACTIVE);
+
+        // 对照：不可达端点必须得到**另一个**原因 —— 证明 probe 能区分原因，
+        // 而不是「把所有失败换成另一个固定常量」
+        ConnectionSpec deadSpec = new ConnectionSpec("probe-dead", TcpAdapter.PROTOCOL_CODE,
+                Endpoint.of("tcp://127.0.0.1:1"), Duration.ofMillis(500), Duration.ofMillis(500),
+                null, null, Map.of());
+        ProbeResult deadResult = adapter.probe(deadSpec, context()).toCompletableFuture()
+                .orTimeout(15, TimeUnit.SECONDS).join();
+        assertThat(deadResult.reachable()).isFalse();
+        assertThat(tlsResult.failureReason())
+                .as("配置错误与端点不可达必须是**不同**的原因，否则仍是一种折叠")
+                .isNotEqualTo(deadResult.failureReason());
     }
 }
