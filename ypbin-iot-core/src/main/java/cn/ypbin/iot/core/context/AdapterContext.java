@@ -72,6 +72,16 @@ public interface AdapterContext {
     TaskScheduler scheduler();
 
     /**
+     * 宿主回调投递器。
+     *
+     * <p><b>协议实现必须用它来调用宿主回调</b>（{@code DataListener.onData}），
+     * 不得在协议库的回调线程上直接执行宿主代码——那等于把任意宿主代码放上 EventLoop/IO 线程。</p>
+     *
+     * @return 投递器
+     */
+    DeliveryDispatcher delivery();
+
+    /**
      * 适配器级资源登记处。
      *
      * @return 资源登记处

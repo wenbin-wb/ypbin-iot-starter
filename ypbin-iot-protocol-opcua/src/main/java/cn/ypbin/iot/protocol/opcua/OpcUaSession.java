@@ -378,11 +378,9 @@ final class OpcUaSession implements DeviceSession {
         subscription.delivered.incrementAndGet();
         context.metrics().recordSubscriptionBatch(1);
         if (subscription.listener != null) {
-            try {
-                subscription.listener.onData(point);
-            } catch (RuntimeException ex) {
-                log.error("[ypbin-iot] opcua data listener failed for device {}", device.deviceId(), ex);
-            }
+            // dispatch() 在 Milo 的 JVM 全局共享执行器上被调用：必须经投递器卸载宿主代码（I4），
+            // 否则宿主阻塞会占用该共享执行器的线程并波及同 JVM 内所有 Milo 连接
+            context.delivery().dispatch(() -> subscription.listener.onData(point));
             return;
         }
         context.egress().emit(new DataBatch(device.deviceId(), device.protocol(),

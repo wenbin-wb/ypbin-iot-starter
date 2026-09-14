@@ -20,11 +20,13 @@ import cn.ypbin.iot.core.context.AdapterSettings;
 import cn.ypbin.iot.core.context.BoundedAddressCache;
 import cn.ypbin.iot.core.context.CredentialResolver;
 import cn.ypbin.iot.core.context.DataEgress;
+import cn.ypbin.iot.core.context.DeliveryDispatcher;
 import cn.ypbin.iot.core.context.LogLevel;
 import cn.ypbin.iot.core.context.MetricsRecorder;
 import cn.ypbin.iot.core.context.ResourceRegistry;
 import cn.ypbin.iot.core.context.TaskScheduler;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import cn.ypbin.iot.runtime.delivery.BoundedDeliveryDispatcher;
 import cn.ypbin.iot.runtime.util.LruAddressCache;
 import java.time.Clock;
 import java.util.Map;
@@ -51,6 +53,9 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
     private final AdapterSettings settings;
 
     private final DataEgress egress;
+
+    /** 宿主回调投递器：把宿主代码从协议线程卸载到框架执行器，且有界。 */
+    private final BoundedDeliveryDispatcher delivery;
 
     private final TaskScheduler scheduler;
 
@@ -84,6 +89,8 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
         this.protocol = Objects.requireNonNull(protocol, "protocol must not be null");
         this.settings = Objects.requireNonNull(settings, "settings must not be null");
         this.egress = Objects.requireNonNull(egress, "egress must not be null");
+        this.delivery = new BoundedDeliveryDispatcher(scheduler,
+                settings.maxPendingRequests());
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler must not be null");
         this.metrics = Objects.requireNonNull(metrics, "metrics must not be null");
         this.credentials = Objects.requireNonNull(credentials, "credentials must not be null");
@@ -105,6 +112,11 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
     @Override
     public DataEgress egress() {
         return egress;
+    }
+
+    @Override
+    public DeliveryDispatcher delivery() {
+        return delivery;
     }
 
     @Override
@@ -159,6 +171,7 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
     /** 释放适配器级资源（实现 {@link AutoCloseable}，便于 {@code AdapterRegistry} 统一收口）。 */
     @Override
     public void close() {
+        delivery.close();
         ((DefaultResourceRegistry) resources).close();
     }
 

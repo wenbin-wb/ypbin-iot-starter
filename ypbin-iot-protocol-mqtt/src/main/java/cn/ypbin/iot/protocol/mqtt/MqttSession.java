@@ -348,11 +348,9 @@ final class MqttSession implements DeviceSession {
         subscription.delivered.incrementAndGet();
         context.metrics().recordSubscriptionBatch(1);
         if (subscription.listener != null) {
-            try {
-                subscription.listener.onData(point);
-            } catch (RuntimeException ex) {
-                log.error("[ypbin-iot] mqtt data listener failed for device {}", device.deviceId(), ex);
-            }
+            // dispatch() 在 HiveMQ 的 IO 线程上被调用：必须经投递器卸载宿主代码（I4），
+            // 否则宿主一次落库就会阻塞该客户端的 IO 线程并波及同链路所有设备
+            context.delivery().dispatch(() -> subscription.listener.onData(point));
             return;
         }
         context.egress().emit(new DataBatch(device.deviceId(), device.protocol(),

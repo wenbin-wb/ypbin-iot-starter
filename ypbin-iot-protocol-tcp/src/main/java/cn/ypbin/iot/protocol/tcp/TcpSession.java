@@ -275,11 +275,8 @@ public final class TcpSession implements DeviceSession {
         context.metrics().recordSubscriptionBatch(1);
         DataListener listener = subscription.listener();
         if (listener != null) {
-            try {
-                listener.onData(value);
-            } catch (RuntimeException ex) {
-                log.error("[ypbin-iot] data listener failed for session {}", sessionId, ex);
-            }
+            // 本方法运行在 Netty EventLoop 上：必须经投递器卸载宿主代码（I4）
+            context.delivery().dispatch(() -> listener.onData(value));
             return;
         }
         context.egress().emit(new DataBatch(device.deviceId(), device.protocol(),

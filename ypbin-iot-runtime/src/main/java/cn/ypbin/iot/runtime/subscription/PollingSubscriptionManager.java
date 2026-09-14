@@ -246,11 +246,9 @@ public final class PollingSubscriptionManager {
             context.metrics().recordSubscriptionBatch(result.values().size());
             if (listener != null) {
                 for (PointValue value : result.values()) {
-                    try {
-                        listener.onData(value);
-                    } catch (RuntimeException ex) {
-                        log.error("[ypbin-iot] data listener failed for subscription {}", subscriptionId, ex);
-                    }
+                    // 必须经投递器：本方法运行在协议库的回调线程或调度器线程上，
+                    // 直接调用宿主代码等于把任意宿主逻辑放上这些线程（I4）
+                    context.delivery().dispatch(() -> listener.onData(value));
                 }
                 return;
             }
