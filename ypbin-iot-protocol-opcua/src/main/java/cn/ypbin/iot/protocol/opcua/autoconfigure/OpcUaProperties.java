@@ -16,6 +16,7 @@
 package cn.ypbin.iot.protocol.opcua.autoconfigure;
 
 import java.time.Duration;
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -39,19 +40,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = OpcUaProperties.PREFIX)
 public record OpcUaProperties(
-        Boolean enabled,
-        String securityPolicy,
-        String securityMode,
-        Duration requestTimeout,
-        Duration publishingInterval,
-        Integer maxNodesPerRead,
-        Integer browseMaxDepth,
-        Integer browseMaxNodes,
-        String username,
-        String credentialRef,
-        String clientKeyStore,
-        String trustListDir,
-        Boolean trustAll) {
+        @Nullable Boolean enabled,
+        @Nullable String securityPolicy,
+        @Nullable String securityMode,
+        @Nullable Duration requestTimeout,
+        @Nullable Duration publishingInterval,
+        @Nullable Integer maxNodesPerRead,
+        @Nullable Integer browseMaxDepth,
+        @Nullable Integer browseMaxNodes,
+        @Nullable String username,
+        @Nullable String credentialRef,
+        @Nullable String clientKeyStore,
+        @Nullable String trustListDir,
+        @Nullable Boolean trustAll) {
 
     /** 配置前缀。 */
     public static final String PREFIX = "ypbin.iot.protocol.opcua";
@@ -87,6 +88,81 @@ public record OpcUaProperties(
      */
     public boolean isEnabled() {
         return Boolean.TRUE.equals(enabled);
+    }
+
+    /**
+     * 归一化后的安全策略。
+     *
+     * <p>组件声明为 {@code @Nullable} 是因为<b>构造参数</b>允许为空（Spring 绑定与
+     * {@code new OpcUaProperties(null, ...)} 都传空表示「未配置」）；紧凑构造器已把它们
+     * 归一化为非空，因此访问器给出<b>非空契约</b>——否则可空性会扩散到所有使用点。</p>
+     *
+     * @return 安全策略（恒非空）
+     */
+    @Override
+    public String securityPolicy() {
+        return securityPolicy == null ? POLICY_NONE : securityPolicy;
+    }
+
+    /**
+     * 归一化后的安全模式。
+     *
+     * @return 安全模式（恒非空）
+     */
+    @Override
+    public String securityMode() {
+        return securityMode == null ? MODE_NONE : securityMode;
+    }
+
+    /**
+     * 归一化后的请求超时。
+     *
+     * @return 请求超时（恒非空）
+     */
+    @Override
+    public Duration requestTimeout() {
+        return requestTimeout == null ? Duration.ofSeconds(10) : requestTimeout;
+    }
+
+    /**
+     * 归一化后的发布间隔。
+     *
+     * @return 发布间隔（恒非空）
+     */
+    @Override
+    public Duration publishingInterval() {
+        return publishingInterval == null ? Duration.ofMillis(500) : publishingInterval;
+    }
+
+    /**
+     * 归一化后的单次读上限。
+     *
+     * @return 单次读最大节点数（恒非空）
+     */
+    @Override
+    public Integer maxNodesPerRead() {
+        return maxNodesPerRead == null || maxNodesPerRead <= 0
+                ? DEFAULT_MAX_NODES_PER_READ : maxNodesPerRead;
+    }
+
+    /**
+     * 归一化后的浏览深度上限。
+     *
+     * @return 浏览最大深度（恒非空）
+     */
+    @Override
+    public Integer browseMaxDepth() {
+        return browseMaxDepth == null || browseMaxDepth <= 0 ? 1 : browseMaxDepth;
+    }
+
+    /**
+     * 归一化后的浏览节点数上限。
+     *
+     * @return 浏览最大节点数（恒非空）
+     */
+    @Override
+    public Integer browseMaxNodes() {
+        return browseMaxNodes == null || browseMaxNodes <= 0 ? 1000 : browseMaxNodes;
     }
 
     /**

@@ -20,6 +20,7 @@ import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.egress.EgressOverflowPolicy;
 import java.time.Duration;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -97,7 +98,8 @@ public record IotProperties(
      * @since 2026-09-13
      */
     public record SchedulerProperties(
-            PlatformPoolProperties platformPool, Integer workerThreads, Duration shutdownTimeout) {
+            PlatformPoolProperties platformPool, @Nullable Integer workerThreads,
+            Duration shutdownTimeout) {
 
         /**
          * 紧凑构造器：归一化默认值。
@@ -129,7 +131,8 @@ public record IotProperties(
      * @author wenbin
      * @since 2026-09-13
      */
-    public record PlatformPoolProperties(Integer coreSize, Integer maxSize, Integer queueCapacity) {
+    public record PlatformPoolProperties(@Nullable Integer coreSize, @Nullable Integer maxSize,
+            Integer queueCapacity) {
 
         /** 默认队列容量。 */
         public static final int DEFAULT_QUEUE_CAPACITY = 10_000;
@@ -318,11 +321,11 @@ public record IotProperties(
             Duration connectTimeout,
             Duration requestTimeout,
             Duration keepAliveInterval,
-            Integer maxConnections,
-            Integer maxPendingRequests,
-            Duration reconnectInitialDelay,
-            Duration reconnectMaxDelay,
-            Double reconnectJitter,
+            @Nullable Integer maxConnections,
+            @Nullable Integer maxPendingRequests,
+            @Nullable Duration reconnectInitialDelay,
+            @Nullable Duration reconnectMaxDelay,
+            @Nullable Double reconnectJitter,
             Integer addressCacheSize,
             Map<String, Object> extended) {
 
@@ -364,6 +367,7 @@ public record IotProperties(
             return new ProtocolProperties(Boolean.TRUE, ConnectionSpec.DEFAULT_CONNECT_TIMEOUT,
                     ConnectionSpec.DEFAULT_REQUEST_TIMEOUT, DefaultAdapterSettings.DEFAULT_KEEP_ALIVE_INTERVAL,
                     null, null, null, null, null, DEFAULT_ADDRESS_CACHE_SIZE, Map.of());
+            // 上面五处 null 表示「未配置，用框架默认」——对应组件已标 @Nullable
         }
 
         /**

@@ -15,6 +15,7 @@
  */
 package cn.ypbin.iot.protocol.mqtt.autoconfigure;
 
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -33,14 +34,31 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = MqttProperties.PREFIX)
 public record MqttProperties(
-        Boolean enabled,
-        String clientIdPrefix,
-        Boolean cleanSession,
-        Integer qosDefault,
-        Boolean retainedDefault) {
+        @Nullable Boolean enabled,
+        @Nullable String clientIdPrefix,
+        @Nullable Boolean cleanSession,
+        @Nullable Integer qosDefault,
+        @Nullable Boolean retainedDefault) {
+
+    /**
+     * 默认 QoS 的读取入口。
+     *
+     * <p>组件声明为 {@code @Nullable} 是因为<b>构造参数</b>允许为空（Spring 绑定与
+     * {@code defaults()} 都传空表示「未配置」）；紧凑构造器已归一化为非空，
+     * 因此访问器给出<b>非空契约</b>——否则可空性会扩散到所有使用点，每处都要重复无意义的判空。</p>
+     *
+     * @return 归一化后的 QoS（恒非空）
+     */
+    @Override
+    public Integer qosDefault() {
+        return qosDefault == null ? DEFAULT_QOS : qosDefault;
+    }
 
     /** 配置前缀。 */
     public static final String PREFIX = "ypbin.iot.protocol.mqtt";
+
+    /** 默认 QoS（紧凑构造器与访问器共用，避免两处各写一个裸字面量）。 */
+    public static final int DEFAULT_QOS = 1;
 
     /** 默认客户端标识前缀。 */
     public static final String DEFAULT_CLIENT_ID_PREFIX = "ypbin-iot";
@@ -56,7 +74,8 @@ public record MqttProperties(
         clientIdPrefix = clientIdPrefix == null || clientIdPrefix.isBlank()
                 ? DEFAULT_CLIENT_ID_PREFIX : clientIdPrefix;
         cleanSession = cleanSession == null ? Boolean.TRUE : cleanSession;
-        qosDefault = qosDefault == null || qosDefault < 0 || qosDefault > MAX_QOS ? 1 : qosDefault;
+        qosDefault = qosDefault == null || qosDefault < 0 || qosDefault > MAX_QOS
+                ? DEFAULT_QOS : qosDefault;
         retainedDefault = retainedDefault == null ? Boolean.FALSE : retainedDefault;
     }
 

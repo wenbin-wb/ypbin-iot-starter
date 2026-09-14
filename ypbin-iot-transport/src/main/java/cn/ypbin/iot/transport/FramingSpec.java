@@ -71,7 +71,7 @@ public record FramingSpec(
      * @return 规格
      */
     public static FramingSpec none() {
-        return new FramingSpec(FramingMode.NONE, DEFAULT_MAX_FRAME_LENGTH, 0, 0, 0, 0, null);
+        return new FramingSpec(FramingMode.NONE, DEFAULT_MAX_FRAME_LENGTH, 0, 0, 0, 0, new byte[0]);
     }
 
     /**
@@ -81,7 +81,7 @@ public record FramingSpec(
      * @return 规格
      */
     public static FramingSpec lengthField1Byte(int maxFrameLength) {
-        return new FramingSpec(FramingMode.LENGTH_FIELD, maxFrameLength, 0, 1, 0, 0, null);
+        return new FramingSpec(FramingMode.LENGTH_FIELD, maxFrameLength, 0, 1, 0, 0, new byte[0]);
     }
 
     /**

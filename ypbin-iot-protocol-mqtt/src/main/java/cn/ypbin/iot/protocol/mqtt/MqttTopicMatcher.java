@@ -16,6 +16,7 @@
 package cn.ypbin.iot.protocol.mqtt;
 
 import java.util.Arrays;
+import org.jspecify.annotations.Nullable;
 
 /**
  * MQTT 主题过滤器匹配。
@@ -107,7 +108,7 @@ final class MqttTopicMatcher {
      * @param topic   具体主题
      * @return 匹配的过滤器；都不匹配时返回 {@code null}
      */
-    static String firstMatch(String[] filters, String topic) {
+    static @Nullable String firstMatch(String[] filters, String topic) {
         return Arrays.stream(filters).filter(filter -> matches(filter, topic)).findFirst().orElse(null);
     }
 }

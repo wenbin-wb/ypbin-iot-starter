@@ -45,6 +45,7 @@ import org.eclipse.milo.opcua.stack.core.security.DefaultClientCertificateValida
 import org.eclipse.milo.opcua.stack.core.security.MemoryCertificateQuarantine;
 import org.eclipse.milo.opcua.stack.core.security.MemoryTrustListManager;
 import org.eclipse.milo.opcua.stack.core.util.validation.ValidationCheck;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,8 +94,9 @@ final class OpcUaSecurity {
      * @author wenbin
      * @since 2026-09-14
      */
-    record Material(KeyPair keyPair, X509Certificate certificate,
-            CertificateValidator certificateValidator, IdentityProvider identityProvider) {
+    record Material(@Nullable KeyPair keyPair, @Nullable X509Certificate certificate,
+            @Nullable CertificateValidator certificateValidator,
+            @Nullable IdentityProvider identityProvider) {
     }
 
     /**

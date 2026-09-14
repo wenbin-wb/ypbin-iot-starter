@@ -62,6 +62,7 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.MonitoringMode;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.TimestampsToReturn;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReadValueId;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -215,7 +216,7 @@ final class OpcUaSession implements DeviceSession {
         }));
     }
 
-    private PointValue toPointValue(PointAddress address, DataValue dataValue, Instant now) {
+    private PointValue toPointValue(PointAddress address, @Nullable DataValue dataValue, Instant now) {
         if (dataValue == null) {
             return PointValue.bad(address, Quality.BAD, OpcUaAdapter.MSG_NO_RESULT, now);
         }
@@ -492,7 +493,8 @@ final class OpcUaSession implements DeviceSession {
 
         private final AtomicLong delivered = new AtomicLong();
 
-        private volatile OpcUaSubscription uaSubscription;
+        /** 监控项句柄；创建成功前为空。 */
+        private volatile @Nullable OpcUaSubscription uaSubscription;
 
         private Subscription(String subscriptionId, SubscribeRequest request, DataListener listener) {
             this.subscriptionId = subscriptionId;

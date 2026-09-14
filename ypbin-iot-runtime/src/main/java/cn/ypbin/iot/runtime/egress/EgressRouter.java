@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,7 +89,12 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
 
     private final Clock clock;
 
-    /** 宿主回调投递器：设备事件与 BLOCK 背压等待都必须卸载出调用线程。 */
+    /**
+     * 宿主回调投递器：设备事件与 BLOCK 背压等待都必须卸载出调用线程。
+     *
+     * <p>允许为空（未注入时退化为调用线程同步执行），这条路径只为直接 {@code new} 的单元测试保留。</p>
+     */
+    @Nullable
     private final DeliveryDispatcher delivery;
 
     private final BlockingQueue<DataBatch> queue;
@@ -144,7 +150,7 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
      */
     public EgressRouter(int batchSize, int queueCapacityPoints, EgressOverflowPolicy overflowPolicy,
             Duration blockTimeout, Duration batchInterval, List<DataSink> sinks,
-            List<DeviceEventListener> listeners, Clock clock, DeliveryDispatcher delivery) {
+            List<DeviceEventListener> listeners, Clock clock, @Nullable DeliveryDispatcher delivery) {
         this.batchSize = batchSize <= 0 ? 1000 : batchSize;
         this.queueCapacityPoints = queueCapacityPoints <= 0 ? 100_000 : queueCapacityPoints;
         this.overflowPolicy = overflowPolicy == null ? EgressOverflowPolicy.DROP_OLDEST : overflowPolicy;
@@ -424,26 +430,37 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
      * 按 deviceId 合并批次，保持单设备内的点位顺序。
      */
     private List<DataBatch> coalesce(List<DataBatch> drained) {
-        Map<String, List<PointValue>> byDevice = new LinkedHashMap<>();
-        Map<String, DataBatch> templates = new LinkedHashMap<>();
+        // 模板与点位放在同一个持有者里：原先用两个 Map（templates / byDevice）靠 deviceId 关联，
+        // 静态分析无法证明 templates.get(id) 非空，运行期也存在「关联断了就 NPE」的隐患。
+        Map<String, Pending> byDevice = new LinkedHashMap<>();
         List<DataBatch> overflow = new ArrayList<>();
         for (DataBatch batch : drained) {
-            templates.putIfAbsent(batch.deviceId(), batch);
-            List<PointValue> merged = byDevice.computeIfAbsent(batch.deviceId(), ignored -> new ArrayList<>());
-            if (merged.size() + batch.size() > batchSize && !merged.isEmpty()) {
-                overflow.add(rebuild(templates.get(batch.deviceId()), merged));
-                merged = new ArrayList<>();
-                byDevice.put(batch.deviceId(), merged);
+            Pending pending = byDevice.computeIfAbsent(batch.deviceId(),
+                    ignored -> new Pending(batch, new ArrayList<>()));
+            if (pending.points().size() + batch.size() > batchSize && !pending.points().isEmpty()) {
+                overflow.add(rebuild(pending.template(), pending.points()));
+                pending.points().clear();
             }
-            merged.addAll(batch.points());
+            pending.points().addAll(batch.points());
         }
         List<DataBatch> result = new ArrayList<>(overflow);
-        for (Map.Entry<String, List<PointValue>> entry : byDevice.entrySet()) {
-            if (!entry.getValue().isEmpty()) {
-                result.add(rebuild(templates.get(entry.getKey()), entry.getValue()));
+        for (Pending pending : byDevice.values()) {
+            if (!pending.points().isEmpty()) {
+                result.add(rebuild(pending.template(), pending.points()));
             }
         }
         return result;
+    }
+
+    /**
+     * 单设备待合并的模板与点位。
+     *
+     * @param template 该设备首批数据的模板（提供 deviceId/protocol/connectionId）
+     * @param points   累积的点位
+     * @author wenbin
+     * @since 2026-09-14
+     */
+    private record Pending(DataBatch template, List<PointValue> points) {
     }
 
     private DataBatch rebuild(DataBatch template, List<PointValue> points) {

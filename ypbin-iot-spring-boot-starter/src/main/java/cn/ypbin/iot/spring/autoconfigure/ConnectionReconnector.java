@@ -25,6 +25,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -304,7 +305,7 @@ final class ConnectionReconnector implements AutoCloseable {
 
         private volatile Duration currentDelay;
 
-        private volatile TaskScheduler.ScheduledTask scheduled;
+        private volatile TaskScheduler.@Nullable ScheduledTask scheduled;
 
         private Attempt(AdapterSettings settings) {
             this.initialDelay = positive(settings.reconnectInitialDelay(), Duration.ofSeconds(1));

@@ -33,6 +33,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -150,7 +151,7 @@ final class OpcUaConnection implements ProtocolConnection {
      *
      * @param cause 原因
      */
-    void onConnectionLost(Throwable cause) {
+    void onConnectionLost(@Nullable Throwable cause) {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
@@ -168,7 +169,7 @@ final class OpcUaConnection implements ProtocolConnection {
      * <p>{@code close()} 因 CAS 失败会成为空操作，因此断开动作必须独立守门——
      * 否则「先因故障置位、再被注册中心回收」的路径会永久泄漏底层 channel 与线程。</p>
      */
-    private void disconnectOnce(Throwable cause) {
+    private void disconnectOnce(@Nullable Throwable cause) {
         if (!disconnected.compareAndSet(false, true)) {
             return;
         }

@@ -36,6 +36,7 @@ import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -265,6 +266,10 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             return OpcUaClient.create(endpointUrl);
         }
         OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties, context, spec.connectionId());
+        // 非 None 策略下证书必然存在（明文分支已在上面提前返回），但类型上仍是可空的：
+        // 显式取出并断言一次，避免下面每个使用点都要判空
+        X509Certificate certificate = Objects.requireNonNull(material.certificate(),
+                "non-None security policy must carry a client certificate");
         return OpcUaClient.create(endpointUrl,
                 endpoints -> selectEndpoint(endpoints, spec),
                 transportConfig -> {
@@ -277,13 +282,13 @@ public final class OpcUaAdapter implements ProtocolAdapter {
                 },
                 config -> {
                     config.setKeyPair(material.keyPair());
-                    config.setCertificate(material.certificate());
+                    config.setCertificate(certificate);
                     // 必须声明 ApplicationUri 且与证书 SAN 中的 URI 一致：
                     // 否则服务端在 CreateSession 时以 Bad_CertificateUriInvalid 拒绝会话
                     // （通道能建、会话永远建不起来）
-                    config.setApplicationUri(OpcUaSecurity.applicationUriOf(material.certificate(),
+                    config.setApplicationUri(OpcUaSecurity.applicationUriOf(certificate,
                             spec.connectionId()));
-                    config.setCertificateChain(new X509Certificate[] {material.certificate()});
+                    config.setCertificateChain(new X509Certificate[] {certificate});
                     config.setCertificateValidator(material.certificateValidator());
                     if (material.identityProvider() != null) {
                         config.setIdentityProvider(material.identityProvider());

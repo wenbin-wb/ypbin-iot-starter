@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -269,7 +270,11 @@ public final class ConnectionRegistry implements AutoCloseable {
                     "acquire retries exhausted"));
         }
         CompletableFuture<Entry> fresh = new CompletableFuture<>();
-        CompletableFuture<Entry> target = null;
+        // 不用 null 兜底：null 会让后续 target.thenCompose 变成可达的空解引用。
+        // 该默认值实际不可达（staleFailure 分支在上面就 return 了），
+        // 一旦真被用到会给出明确原因，而不是 NPE。
+        CompletableFuture<Entry> target = Stages.failed(new ConnectionException(key,
+                IotMessageKeys.CONNECTION_FAILED, "no connection path was selected"));
         boolean staleFailure = false;
         boolean mustOpen = false;
         lifecycle.readLock().lock();
@@ -521,6 +526,8 @@ public final class ConnectionRegistry implements AutoCloseable {
 
         private int refCount;
 
+        /** 空闲起始时刻；引用计数归零前为空（此时不参与空闲回收）。 */
+        @Nullable
         private Instant idleSince;
 
         private long idleEpoch;

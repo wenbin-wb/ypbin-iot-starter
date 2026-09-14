@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -170,7 +171,8 @@ public final class PollingSubscriptionManager {
 
         private final AtomicBoolean inFlight = new AtomicBoolean(false);
 
-        private volatile TaskScheduler.ScheduledTask scheduled;
+        /** 定时任务句柄；启动前为空。（限定类型上的类型注解必须写在内层类型名前） */
+        private volatile TaskScheduler.@Nullable ScheduledTask scheduled;
 
         private PollingSubscription(String subscriptionId, DeviceSession session, SubscribeRequest request,
                 DataListener listener) {

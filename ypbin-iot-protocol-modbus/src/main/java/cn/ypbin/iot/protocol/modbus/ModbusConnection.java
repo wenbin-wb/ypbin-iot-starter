@@ -40,6 +40,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,7 +67,8 @@ final class ModbusConnection implements ProtocolConnection {
     private final PollingSubscriptionManager polling;
 
     /** 保活任务：定期检查链路是否仍然连接，断开则触发注册中心重连。 */
-    private final TaskScheduler.ScheduledTask keepAliveTask;
+    /** 保活任务；保活间隔未配置或非正数时不排定（此时为空）。 */
+    private final TaskScheduler.@Nullable ScheduledTask keepAliveTask;
 
     /** 保活探测的等待上限。 */
     private final Duration keepAliveProbeTimeout;
@@ -232,7 +234,7 @@ final class ModbusConnection implements ProtocolConnection {
      *
      * @param cause 原因；正常关闭时为 {@code null}
      */
-    void onConnectionLost(Throwable cause) {
+    void onConnectionLost(@Nullable Throwable cause) {
         if (!closed.compareAndSet(false, true)) {
             return;
         }

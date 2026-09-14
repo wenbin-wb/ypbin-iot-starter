@@ -88,7 +88,7 @@ public record TcpProperties(
         }
         if (framingMode == FramingMode.LENGTH_FIELD) {
             return new FramingSpec(FramingMode.LENGTH_FIELD, maxFrameLength, lengthFieldOffset,
-                    lengthFieldLength, lengthAdjustment, initialBytesToStrip, null);
+                    lengthFieldLength, lengthAdjustment, initialBytesToStrip, new byte[0]);
         }
         return FramingSpec.none();
     }

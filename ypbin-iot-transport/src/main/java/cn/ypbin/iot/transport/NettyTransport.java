@@ -44,6 +44,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -254,6 +255,8 @@ public final class NettyTransport implements AutoCloseable {
 
         private final CompletableFuture<NettyChannelConnection> result;
 
+        /** channelActive 之前为空；用法点统一走「可空字段 + 局部变量双重检查」。 */
+        @Nullable
         private NettyChannelConnection connection;
 
         private TransportHandler(ConnectionSpec spec, CompletableFuture<NettyChannelConnection> result) {

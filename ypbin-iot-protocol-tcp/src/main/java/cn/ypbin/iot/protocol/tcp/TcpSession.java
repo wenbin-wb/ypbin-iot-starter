@@ -40,6 +40,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -47,6 +48,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -175,7 +177,11 @@ public final class TcpSession implements DeviceSession {
                 index++;
                 continue;
             }
-            CompletableFuture<Void> pending = connection.write(encoded.payload()).toCompletableFuture();
+            // success 与 payload 非空是配套的，但类型系统表达不了这个关联：
+            // 显式断言，把「成功却没有负载」变成带原因的失败而不是 NPE
+            byte[] payload = Objects.requireNonNull(encoded.payload(),
+                    "successful encoding must carry a payload");
+            CompletableFuture<Void> pending = connection.write(payload).toCompletableFuture();
             if (pending.isDone()) {
                 // 已同步完成：继续用循环推进，避免回调内联递归
                 recordStatus(write, pending.isCompletedExceptionally(), statuses);
@@ -220,6 +226,21 @@ public final class TcpSession implements DeviceSession {
         return CompletableFuture.completedFuture(subscription);
     }
 
+    /**
+     * 摘除该订阅注册的帧监听器。
+     *
+     * <p>订阅在 {@code start} 之前被取消时从未注册过监听器，此处跳过——
+     * 直接传空会给 {@code removeFrameListener} 一个无意义的参数。</p>
+     *
+     * @param subscription 订阅
+     */
+    private void removeFrameListener(TcpSubscription subscription) {
+        Consumer<byte[]> consumer = subscription.frameConsumer();
+        if (consumer != null) {
+            connection.removeFrameListener(consumer);
+        }
+    }
+
     @Override
     public CompletionStage<Void> unsubscribe(SubscriptionHandle handle) {
         if (handle == null) {
@@ -231,7 +252,7 @@ public final class TcpSession implements DeviceSession {
             return CompletableFuture.completedFuture(null);
         }
         subscription.cancel();
-        connection.removeFrameListener(subscription.frameConsumer());
+        removeFrameListener(subscription);
         return CompletableFuture.completedFuture(null);
     }
 
@@ -259,7 +280,7 @@ public final class TcpSession implements DeviceSession {
         state = SessionState.CLOSED;
         subscriptions.values().forEach(subscription -> {
             subscription.cancel();
-            connection.removeFrameListener(subscription.frameConsumer());
+            removeFrameListener(subscription);
         });
         subscriptions.clear();
         connection.close();
@@ -301,7 +322,7 @@ public final class TcpSession implements DeviceSession {
 
         private final AtomicBoolean active = new AtomicBoolean(true);
 
-        private volatile Consumer<byte[]> frameConsumer;
+        private volatile @Nullable Consumer<byte[]> frameConsumer;
 
         private TcpSubscription(String subscriptionId, List<PointAddress> addresses, DataListener listener) {
             this.subscriptionId = subscriptionId;
@@ -313,7 +334,8 @@ public final class TcpSession implements DeviceSession {
             this.frameConsumer = consumer;
         }
 
-        private Consumer<byte[]> frameConsumer() {
+        private @Nullable Consumer<byte[]> frameConsumer() {
+            // 未注册帧消费者时为空；调用方按「有则消费」处理
             return frameConsumer;
         }
 

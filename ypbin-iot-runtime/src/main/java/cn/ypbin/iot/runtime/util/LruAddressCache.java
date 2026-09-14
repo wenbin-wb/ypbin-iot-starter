@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 有界地址解析缓存：LRU 淘汰 + 锁保护。
@@ -97,7 +98,7 @@ public final class LruAddressCache<A> implements BoundedAddressCache<A> {
         }
     }
 
-    private A read(String raw) {
+    private @Nullable A read(String raw) {
         lock.lock();
         try {
             return cache.get(raw);

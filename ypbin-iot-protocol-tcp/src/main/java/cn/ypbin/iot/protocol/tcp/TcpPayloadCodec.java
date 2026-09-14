@@ -16,6 +16,7 @@
 package cn.ypbin.iot.protocol.tcp;
 
 import java.nio.charset.StandardCharsets;
+import org.jspecify.annotations.Nullable;
 
 /**
  * TCP 透传的载荷编码：把写项的值转为待发送字节。
@@ -55,7 +56,7 @@ final class TcpPayloadCodec {
      * @author wenbin
      * @since 2026-09-13
      */
-    record Encoded(byte[] payload, String messageKey) {
+    record Encoded(@Nullable byte[] payload, @Nullable String messageKey) {
 
         /**
          * 编码成功。

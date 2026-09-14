@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.core.Ordered;
@@ -82,7 +83,7 @@ public class IotDefaultsEnvironmentPostProcessor implements EnvironmentPostProce
      * @param existing 现有配置值；可能为空
      * @return 合并后的逗号分隔 basename
      */
-    private static String mergedBasename(String existing) {
+    private static String mergedBasename(@Nullable String existing) {
         Set<String> basenames = new LinkedHashSet<>();
         if (existing != null && !existing.isBlank()) {
             for (String item : existing.split(",")) {
