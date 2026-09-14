@@ -17,6 +17,7 @@ package cn.ypbin.iot.core.model;
 
 import java.time.Instant;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 链路关闭原因。
@@ -28,7 +29,8 @@ import java.util.Objects;
  * @author wenbin
  * @since 2026-09-13
  */
-public record CloseReason(CloseCause cause, String message, Throwable error, Instant closedAt) {
+public record CloseReason(CloseCause cause, String message, @Nullable Throwable error,
+        Instant closedAt) {
 
     /**
      * 紧凑构造器：校验必填项。

@@ -20,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 协议描述符：协议身份、能力与兼容性声明。
@@ -110,9 +111,10 @@ public record ProtocolDescriptor(
 
         private final Map<String, String> attributes = new LinkedHashMap<>();
 
+        @Nullable
         private ProtocolCode code;
 
-        private String name;
+        private String name = "";
 
         private String vendor = "";
 
@@ -248,6 +250,14 @@ public record ProtocolDescriptor(
          * @return 描述符
          */
         public ProtocolDescriptor build() {
+            // 必填项校验：原来直接构造，未设置 code/name 时会产出一个「看似合法」的描述符
+            // （空标识），错误会漂到很远的地方才暴露
+            if (code == null) {
+                throw new IllegalStateException("ProtocolDescriptor.code must be set before build()");
+            }
+            if (name.isBlank()) {
+                throw new IllegalStateException("ProtocolDescriptor.name must be set before build()");
+            }
             return new ProtocolDescriptor(code, name, vendor, stackVersion, transport,
                     capabilities, extensions, minimumRuntimeVersion, maximumRuntimeVersion, attributes);
         }

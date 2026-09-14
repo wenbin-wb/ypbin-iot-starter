@@ -16,6 +16,7 @@
 package cn.ypbin.iot.core.exception;
 
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 能力不支持：调用未在 {@code ProtocolDescriptor.capabilities()} 中声明的方法时抛出。
@@ -33,6 +34,7 @@ public class UnsupportedCapabilityException extends IotException {
     /** iot.common.capability.unsupported 消息键。 */
     public static final String MESSAGE_KEY = "iot.common.capability.unsupported";
 
+    @Nullable
     private final ProtocolCode protocol;
 
     private final String operation;
@@ -43,8 +45,8 @@ public class UnsupportedCapabilityException extends IotException {
      * @param protocol  协议标识
      * @param operation 被调用的操作名
      */
-    public UnsupportedCapabilityException(ProtocolCode protocol, String operation) {
-        super(MESSAGE_KEY, protocol == null ? null : protocol.value(), operation);
+    public UnsupportedCapabilityException(@Nullable ProtocolCode protocol, String operation) {
+        super(MESSAGE_KEY, protocol == null ? "" : protocol.value(), operation);
         this.protocol = protocol;
         this.operation = operation;
     }
@@ -54,7 +56,7 @@ public class UnsupportedCapabilityException extends IotException {
      *
      * @return 协议标识
      */
-    public ProtocolCode getProtocol() {
+    public @Nullable ProtocolCode getProtocol() {
         return protocol;
     }
 

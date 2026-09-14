@@ -16,6 +16,7 @@
 package cn.ypbin.iot.core.model;
 
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 单个写项的结果。
@@ -26,7 +27,8 @@ import java.util.Objects;
  * @author wenbin
  * @since 2026-09-13
  */
-public record PointWriteStatus(PointAddress address, boolean success, String reason) {
+public record PointWriteStatus(PointAddress address, boolean success,
+        @Nullable String reason) {
 
     /**
      * 紧凑构造器：校验地址非空，成功后强制清空原因。

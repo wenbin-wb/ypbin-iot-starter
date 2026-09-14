@@ -18,6 +18,7 @@ package cn.ypbin.iot.core.model;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import java.time.Instant;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 设备生命周期与异常事件。
@@ -39,7 +40,7 @@ public record DeviceEvent(
         ProtocolCode protocol,
         DeviceEventType type,
         String messageKey,
-        Throwable cause,
+        @Nullable Throwable cause,
         Instant occurredAt) {
 
     /**

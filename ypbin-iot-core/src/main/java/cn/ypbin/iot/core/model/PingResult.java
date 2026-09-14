@@ -15,6 +15,8 @@
  */
 package cn.ypbin.iot.core.model;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * 链路保活结果。
  *
@@ -24,7 +26,8 @@ package cn.ypbin.iot.core.model;
  * @author wenbin
  * @since 2026-09-13
  */
-public record PingResult(boolean alive, long roundTripMillis, String failureReason) {
+public record PingResult(boolean alive, long roundTripMillis,
+        @Nullable String failureReason) {
 
     /**
      * 紧凑构造器：存活时清空失败原因。

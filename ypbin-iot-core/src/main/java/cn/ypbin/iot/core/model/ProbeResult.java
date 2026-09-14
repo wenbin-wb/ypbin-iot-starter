@@ -19,6 +19,7 @@ import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 连通性探测结果。
@@ -39,10 +40,10 @@ import java.util.Objects;
 public record ProbeResult(
         boolean reachable,
         ProtocolDescriptor protocol,
-        String serverIdentity,
+        @Nullable String serverIdentity,
         Map<String, String> details,
-        String failureReason,
-        Long clockSkewMillis,
+        @Nullable String failureReason,
+        @Nullable Long clockSkewMillis,
         Duration elapsed) {
 
     /**

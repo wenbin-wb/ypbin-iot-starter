@@ -9,7 +9,10 @@
     <parent>
         <groupId>cn.ypbin</groupId>
         <artifactId>ypbin-starter-dependencies</artifactId>
-        <version>2.2.3</version>
+        <!-- 与母仓保持同一基线：NullAway / dependencyConvergence 等门禁 profile 定义在父 pom 里，
+             2.2.3 没有它们。3.1.0-SNAPSHOT 是母仓当前开发版；母仓发布 3.1.0 正式版后应改钉正式版
+             （依赖快照父 pom 会削弱可复现性，这是一笔明确的取舍）。 -->
+        <version>3.1.0-SNAPSHOT</version>
         <relativePath/>
     </parent>
 

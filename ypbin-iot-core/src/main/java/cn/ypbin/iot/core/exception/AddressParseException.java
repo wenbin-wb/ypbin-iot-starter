@@ -16,6 +16,7 @@
 package cn.ypbin.iot.core.exception;
 
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 地址解析失败。
@@ -30,6 +31,7 @@ public class AddressParseException extends IotException {
     /** iot.common.address.parse-failed 消息键。 */
     public static final String MESSAGE_KEY = "iot.common.address.parse-failed";
 
+    @Nullable
     private final ProtocolCode protocol;
 
     private final String rawAddress;
@@ -41,8 +43,8 @@ public class AddressParseException extends IotException {
      * @param raw      原始地址字符串
      * @param reason   失败原因
      */
-    public AddressParseException(ProtocolCode protocol, String raw, String reason) {
-        super(MESSAGE_KEY, protocol == null ? null : protocol.value(), raw, reason);
+    public AddressParseException(@Nullable ProtocolCode protocol, String raw, String reason) {
+        super(MESSAGE_KEY, protocol == null ? "" : protocol.value(), raw, reason);
         this.protocol = protocol;
         this.rawAddress = raw;
     }
@@ -52,7 +54,7 @@ public class AddressParseException extends IotException {
      *
      * @return 协议标识
      */
-    public ProtocolCode getProtocol() {
+    public @Nullable ProtocolCode getProtocol() {
         return protocol;
     }
 

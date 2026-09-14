@@ -26,4 +26,9 @@
             <artifactId>jspecify</artifactId>
         </dependency>
     </dependencies>
+
+    <properties>
+        <!-- 参与 NullAway 空值语义检查（父 pom 的 nullaway profile 据此限定检查范围） -->
+        <nullaway.packages>cn.ypbin.iot.core</nullaway.packages>
+    </properties>
 </project>

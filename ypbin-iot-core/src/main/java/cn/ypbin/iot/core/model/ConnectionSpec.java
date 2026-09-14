@@ -19,6 +19,7 @@ import cn.ypbin.iot.core.protocol.ProtocolCode;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 物理连接规格：描述一条链路的建立参数。
@@ -43,7 +44,7 @@ public record ConnectionSpec(
         Duration connectTimeout,
         Duration requestTimeout,
         TlsOptions tls,
-        String credentialRef,
+        @Nullable String credentialRef,
         Map<String, String> properties) {
 
     /** 默认建链超时。 */

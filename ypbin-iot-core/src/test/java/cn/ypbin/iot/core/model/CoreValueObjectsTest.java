@@ -183,8 +183,15 @@ class CoreValueObjectsTest {
         assertThat(descriptor.minimumRuntimeVersion()).isEmpty();
         assertThat(descriptor.supports(ProtocolCapability.READ)).isFalse();
         assertThat(descriptor.attributes()).containsEntry("defaultPort", "0");
+        // 契约变更：原来 code 未设置时是「NPE 或产出空 code 的描述符」，现在改为**装配期显式失败**
+        // 并说明原因（NullAway 启用 @NullMarked 后，code 标为可空并在 build() 校验）
         assertThatThrownBy(() -> ProtocolDescriptor.builder().name("x").build())
-                .isInstanceOf(NullPointerException.class);
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("code must be set");
+        assertThatThrownBy(() -> ProtocolDescriptor.builder().code(ProtocolCode.of("tcp")).build())
+                .as("name 同样必填")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("name must be set");
     }
 
     @Test

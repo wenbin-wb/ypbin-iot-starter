@@ -17,6 +17,7 @@ package cn.ypbin.iot.core.model;
 
 import java.time.Instant;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 点位值。
@@ -35,10 +36,10 @@ import java.util.Objects;
  */
 public record PointValue(
         PointAddress address,
-        Object value,
+        @Nullable Object value,
         Quality quality,
         Instant timestamp,
-        String qualityReason) {
+        @Nullable String qualityReason) {
 
     /**
      * 紧凑构造器：校验必填项。

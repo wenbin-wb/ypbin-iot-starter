@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 订阅请求。
@@ -35,7 +36,7 @@ public record SubscribeRequest(
         List<PointAddress> addresses,
         Duration samplingInterval,
         Duration publishingInterval,
-        Double deadband,
+        @Nullable Double deadband,
         Map<String, String> options) {
 
     /** 默认采样周期。 */
