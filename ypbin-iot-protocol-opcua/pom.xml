@@ -44,11 +44,10 @@
             <artifactId>milo-sdk-server</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- 服务端传输实现（Netty）在独立制品里，milo-sdk-server 不传递它 -->
+        <!-- 传输实现（Netty）在独立制品里：客户端的安全策略路径与服务端 harness 都需要它 -->
         <dependency>
             <groupId>org.eclipse.milo</groupId>
             <artifactId>milo-transport</artifactId>
-            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

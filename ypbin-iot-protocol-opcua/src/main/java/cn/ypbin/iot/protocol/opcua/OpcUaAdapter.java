@@ -31,7 +31,10 @@ import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
 import cn.ypbin.iot.core.util.Stages;
 import cn.ypbin.iot.protocol.opcua.autoconfigure.OpcUaProperties;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -39,6 +42,8 @@ import java.util.concurrent.TimeUnit;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.SessionActivityListener;
 import org.eclipse.milo.opcua.sdk.client.UaSession;
+import org.eclipse.milo.opcua.stack.core.UaException;
+import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,6 +91,15 @@ public final class OpcUaAdapter implements ProtocolAdapter {
 
     /** 凭据需要安全策略的消息键。 */
     public static final String MSG_CREDENTIALS_NEED_SECURITY = "iot.opcua.credentials.need-security";
+
+    /** 缺少客户端证书（keystore）的消息键。 */
+    public static final String MSG_KEYSTORE_MISSING = "iot.opcua.keystore.missing";
+
+    /** 未配置信任列表的消息键。 */
+    public static final String MSG_TRUST_NOT_CONFIGURED = "iot.opcua.trust.not-configured";
+
+    /** 取不到凭据的消息键。 */
+    public static final String MSG_CREDENTIAL_MISSING = "iot.opcua.credential.missing";
 
     /** 读失败的消息键。 */
     public static final String MSG_READ_FAILED = "iot.opcua.read.failed";
@@ -143,7 +157,7 @@ public final class OpcUaAdapter implements ProtocolAdapter {
      */
     public OpcUaAdapter(OpcUaProperties properties) {
         this.properties = properties == null ? new OpcUaProperties(null, null, null, null, null, null,
-                null, null, null, null) : properties;
+                null, null, null, null, null, null, null) : properties;
     }
 
     @Override
@@ -190,7 +204,8 @@ public final class OpcUaAdapter implements ProtocolAdapter {
         // 否则会阻塞调用线程（SPI §2 禁止），且 spec.connectTimeout 根本约束不到它。
         long connectTimeoutMillis = Math.max(1L, spec.connectTimeout().toMillis());
         return Stages.normalize(CompletableFuture
-                .supplyAsync(() -> createAndConnect(spec, endpointUrl), context.scheduler().platformThreadExecutor())
+                .supplyAsync(() -> createAndConnect(spec, context, endpointUrl),
+                        context.scheduler().platformThreadExecutor())
                 .orTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
                 .thenApply(connected -> opened(spec, endpointUrl, connected))
                 .exceptionally(error -> {
@@ -205,10 +220,11 @@ public final class OpcUaAdapter implements ProtocolAdapter {
      * <p>失败时必须显式断开：{@code create} 可能已经建出底层 channel，
      * 不回收会留下「对端看到的已接受连接 + 本端仍在发心跳」的泄漏。</p>
      */
-    private static OpcUaClient createAndConnect(ConnectionSpec spec, String endpointUrl) {
+    private OpcUaClient createAndConnect(ConnectionSpec spec, AdapterContext context,
+            String endpointUrl) {
         OpcUaClient client = null;
         try {
-            client = OpcUaClient.create(endpointUrl);
+            client = createClient(spec, context, endpointUrl);
             return client.connectAsync()
                     .orTimeout(Math.max(1L, spec.connectTimeout().toMillis()), TimeUnit.MILLISECONDS)
                     .join();
@@ -224,6 +240,53 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             throw ex instanceof RuntimeException runtime
                     ? runtime : new IllegalStateException("opcua connect failed", ex);
         }
+    }
+
+    /**
+     * 创建客户端。
+     *
+     * <p>明文策略走无参重载；非 None 策略必须携带证书、校验器与身份，
+     * 并按安全策略选出匹配的端点——选错端点会让服务端在握手阶段拒绝，
+     * 而错误看起来像「端点不可达」。</p>
+     */
+    private OpcUaClient createClient(ConnectionSpec spec, AdapterContext context, String endpointUrl)
+            throws UaException {
+        if (properties.isPlaintext()) {
+            return OpcUaClient.create(endpointUrl);
+        }
+        OpcUaSecurity.Material material = OpcUaSecurity.prepare(properties, context, spec.connectionId());
+        return OpcUaClient.create(endpointUrl,
+                endpoints -> selectEndpoint(endpoints, spec),
+                // 传输配置保持默认：握手超时由外层 orTimeout 统一施加（见 createAndConnect）
+                transportConfig -> { },
+                config -> {
+                    config.setKeyPair(material.keyPair());
+                    config.setCertificate(material.certificate());
+                    config.setCertificateChain(new X509Certificate[] {material.certificate()});
+                    config.setCertificateValidator(material.certificateValidator());
+                    if (material.identityProvider() != null) {
+                        config.setIdentityProvider(material.identityProvider());
+                    }
+                });
+    }
+
+    /**
+     * 按配置的安全策略与模式选择服务端端点。
+     */
+    private Optional<EndpointDescription> selectEndpoint(List<EndpointDescription> endpoints,
+            ConnectionSpec spec) {
+        Optional<EndpointDescription> matched = endpoints.stream()
+                .filter(endpoint -> properties.securityPolicy().equals(endpoint.getSecurityPolicyUri()))
+                .filter(endpoint -> endpoint.getSecurityMode() != null
+                        && properties.securityMode().equalsIgnoreCase(endpoint.getSecurityMode().name()))
+                .findFirst();
+        if (matched.isEmpty()) {
+            log.warn("[ypbin-iot] no OPC UA endpoint matched policy {} / mode {} for connection {}; "
+                    + "available: {}", properties.securityPolicy(), properties.securityMode(),
+                    spec.connectionId(),
+                    endpoints.stream().map(EndpointDescription::getSecurityPolicyUri).toList());
+        }
+        return matched;
     }
 
     /**

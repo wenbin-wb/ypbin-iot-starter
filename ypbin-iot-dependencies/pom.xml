@@ -66,11 +66,11 @@
                 <version>${milo.version}</version>
                 <scope>test</scope>
             </dependency>
+            <!-- 服务端传输实现（Netty）在独立制品里；客户端用到 4 参 create 重载时也需要它 compile 可见 -->
             <dependency>
                 <groupId>org.eclipse.milo</groupId>
                 <artifactId>milo-transport</artifactId>
                 <version>${milo.version}</version>
-                <scope>test</scope>
             </dependency>
 
             <!-- 本仓模块 -->
