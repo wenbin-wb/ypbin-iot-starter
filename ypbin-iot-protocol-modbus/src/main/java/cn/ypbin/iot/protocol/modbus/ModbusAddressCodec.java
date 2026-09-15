@@ -137,7 +137,14 @@ final class ModbusAddressCodec {
     }
 
     private static ModbusAddress parseTraditional(String text, String raw) {
-        int value = Integer.parseInt(text);
+        int value;
+        try {
+            value = Integer.parseInt(text);
+        } catch (NumberFormatException ex) {
+            // 调用点有 `^\d{1,5}$` 守卫，理论上到不了这里；但解析器不应把
+            // 未捕获的 NumberFormatException 泄漏给调用方（与 parseOffset 保持同一写法）。
+            throw new AddressParseException(PROTOCOL, raw, "traditional address is not a number: " + text);
+        }
         if (value < TRADITIONAL_MIN || value > TRADITIONAL_MAX) {
             throw new AddressParseException(PROTOCOL, raw,
                     "traditional address out of range [1, " + TRADITIONAL_MAX + "]: " + value);
