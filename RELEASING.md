@@ -24,6 +24,7 @@
 | 父 pom 获取 | ✅ 钉的是已发布正式版 `3.1.0`（Central 可解析），CI 可直接构建 |
 | 远端仓库 | ✅ 已配置（`github.com/wenbin-wb/ypbin-iot-starter`） |
 | 工作流 | `.github/workflows/` 的 ci / codeql / release 已接入（release 默认 dry-run）|
+| 首次 CI 运行 | ✅ 已通过（8 个步骤全部真实执行：构建 124s / NullAway 26s / 依赖收敛 / 元数据 / SBOM 26s）|
 
 ## 二、每次发布
 

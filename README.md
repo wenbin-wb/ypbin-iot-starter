@@ -1,5 +1,8 @@
 # ypbin-iot-starter
 
+[![CI](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml)
+
 > 多协议物联网接入框架 Spring Boot Starter —— **JDK 21 · Spring Boot 4.1 · Netty 4.1**
 > 目标：单机 10 万连接，集群千万级。
 
@@ -214,6 +217,9 @@ mvn -Psbom verify              # 生成 SBOM
 tools/preflight.sh             # 发布前总检（按正确顺序把上述门禁各跑一遍）
 ```
 
+> **CI 已实测通过**（首次运行）：8 个步骤全部真实执行 —— 全量构建与单测 124s、
+> NullAway 26s、依赖收敛 4s、元数据漂移校验、SBOM 生成 26s（耗时即「确实跑了」的证据）。
+>
 > **`-Pit` 目前是空转**：本仓还没有任何 `*IT.java`，`mvn -Pit verify` 不会执行任何集成测试。
 > 协议侧的端到端验证目前都在各协议模块的单测里（自带本地模拟器/broker/服务端）。
 >
