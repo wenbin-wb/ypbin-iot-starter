@@ -1,0 +1,48 @@
+version: 2
+updates:
+  # Maven 依赖：每周检查，安全更新优先合并
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      # 同族依赖合并为一个 PR，减少噪音
+      spring:
+        patterns:
+          - "org.springframework*"
+          - "org.springframework.boot*"
+      test:
+        patterns:
+          - "org.junit*"
+          - "org.assertj*"
+          - "org.mockito*"
+          - "org.testcontainers*"
+          - "com.tngtech.archunit*"
+          - "io.moquette*"
+      # 协议库：一个协议模块一个库，升级方式各异（包结构/构造签名经常变），
+      # 合批可以让「验证一次」覆盖同一轮升级，避免 5 个 PR 各跑一遍全量构建。
+      protocol:
+        patterns:
+          - "io.netty*"
+          - "com.digitalpetri*"
+          - "com.hivemq*"
+          - "org.eclipse.milo*"
+      # 静态分析工具链：Error Prone 与 NullAway 存在版本耦合（新版 EP 会改变插件调用方式），
+      # 必须同批升级、同批验证，避免只升其一导致「插件起不来/分析空转」
+      analysis:
+        patterns:
+          - "com.google.errorprone*"
+          - "com.uber.nullaway*"
+          - "org.jspecify*"
+    labels:
+      - dependencies
+
+  # GitHub Actions 版本
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
