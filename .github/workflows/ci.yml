@@ -23,11 +23,12 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # 不带任何 -P：dev-only 是 activeByDefault profile，显式激活任一 profile 都会让它失效，
-      # 架构约束门禁（含 ModulePublishingTest）就不会跑。这是本步骤唯一正确的调用方式。
-      - name: 全量构建与单元测试（含架构约束与覆盖率门禁）
-        run: mvn -B -ntp clean test
-
+      # ⚠️ 顺序不是随意的：本步骤内部是 `mvn ... clean compile`，会清掉各模块的 target/。
+      # 因此凡是「会 clean 的步骤」都必须排在「产出覆盖率报告」的构建步骤**之前**——
+      # 否则 `target/site/jacoco/` 会被删掉，末尾的归档步骤会「步骤成功、归档为空」。
+      # 2026-09-15 实测过这个事故：日志里出现
+      # `##[warning]No files were found with the provided path: **/target/site/jacoco/`，
+      # 产物清单里只有 sbom 与 failsafe-reports。
       # 自带「门禁是否真的执行过」自检：出现 Nothing to compile 或某模块没有编译记录即失败。
       - name: 空值语义门禁（NullAway）
         run: tools/check-nullaway.sh
@@ -35,8 +36,18 @@ jobs:
       - name: 依赖版本收敛
         run: mvn -B -ntp -Pdep-convergence validate
 
+      # 不带任何 -P：dev-only 是 activeByDefault profile，显式激活任一 profile 都会让它失效，
+      # 架构约束门禁（含 ModulePublishingTest）就不会跑。这是本步骤唯一正确的调用方式。
+      - name: 全量构建与单元测试（含架构约束与覆盖率门禁）
+        run: mvn -B -ntp clean test
+
       - name: 校验配置元数据未漂移
         run: node tools/export-config-metadata.mjs --check
+
+      # 只校验模块集合（确定性），不校验数值：覆盖率有 0.04~0.78pp 的执行波动，
+      # 把波动的数字当门禁必然产生假失败。
+      - name: 校验覆盖率快照的模块集合未漂移
+        run: node tools/export-coverage.mjs --check
 
       - name: 生成 CycloneDX SBOM（软件物料清单）
         run: mvn -B -ntp -Psbom verify -DskipTests
@@ -48,6 +59,19 @@ jobs:
           path: '**/target/bom.json'
           if-no-files-found: warn
 
+      # 归档前断言：覆盖率报告必须真的存在。
+      # 为什么需要它：`if-no-files-found: warn` **只告警、不让 job 失败**，
+      # 于是「归档报告」这一步可以在零产物的情况下显示 success（本仓真实发生过）。
+      - name: 归档前校验覆盖率报告存在
+        run: |
+          set -euo pipefail
+          count="$(find . -path '*/target/site/jacoco/jacoco.csv' | wc -l)"
+          echo "jacoco.csv 数量 = ${count}（期望 >= 8：8 个既有主源码又有测试数据的模块）"
+          if [ "${count}" -lt 8 ]; then
+            echo "::error::覆盖率报告缺失或不足（实测 ${count} 个）—— 多半是前面的步骤执行了 clean，归档会传空"
+            exit 1
+          fi
+
       - name: 归档 JaCoCo 覆盖率报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -56,8 +80,13 @@ jobs:
           path: '**/target/site/jacoco/'
           if-no-files-found: warn
 
-  # 集成测试独立作业：与 build 作业用**同一个 -Pit** 跑，避免与单元测试重复。
-  # -Dsurefire.skip=true 只跳过 surefire（单元测试），failsafe(*IT.java) 照跑。
+  # 集成测试独立作业。
+  #
+  # `-Pit` 在根 pom 的 it profile 里**显式跳过 surefire**，所以本作业只跑 failsafe(*IT.java)，
+  # 不会把全量单测重复跑一遍。
+  # ⚠️ 不要再用 `-Dsurefire.skip=true`：实测该开关在本项目**不生效**
+  # （CI 日志里 11 个模块的 surefire 全部执行、没有任何 "Tests are skipped"），
+  # 它只是让注释看起来对了，实际什么也没跳过。
   integration-tests:
     runs-on: ubuntu-latest
     steps:
@@ -75,7 +104,35 @@ jobs:
       # architecture-tests 与 integration-tests 两个模块 —— 否则反应堆里没有 IT 模块，
       # 命令会"成功"但一个 IT 都没跑（门禁空转）。
       - name: 集成测试（*IT.java，嵌入式 broker/服务端）
-        run: mvn -B -ntp -Pit -Dsurefire.skip=true verify
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -Pit verify 2>&1 | tee it-verify.log
+
+      # 断言两件事，把「开关真的生效」变成可验证的事实：
+      #   ① failsafe 真的执行了，且至少跑了 5 个 IT 用例；
+      #   ② surefire 一个用例都没跑（否则说明 it profile 的 skip 失效，单测在被重复执行）。
+      - name: 校验 IT 作业真的只跑了集成测试
+        run: |
+          set -euo pipefail
+          failsafe_runs="$(grep -cE 'failsafe:[0-9.]+:integration-test' it-verify.log || true)"
+          it_total="$(grep -E 'Tests run:.*-- in cn\.ypbin\.iot\.it\.' it-verify.log \
+            | awk -F'Tests run: ' '{split($2, a, ","); sum += a[1]} END {print sum + 0}')"
+          other_lines="$(grep -E 'Tests run:.*-- in ' it-verify.log \
+            | grep -vcE '-- in cn\.ypbin\.iot\.it\.' || true)"
+          echo "failsafe 执行次数 = ${failsafe_runs}；IT 用例数 = ${it_total}；非 IT 用例记录 = ${other_lines}"
+          if [ "${failsafe_runs}" -lt 1 ]; then
+            echo "::error::failsafe 没有执行 —— 集成测试没有真的跑"
+            exit 1
+          fi
+          if [ "${it_total}" -lt 5 ]; then
+            echo "::error::IT 用例数不足 5（实测 ${it_total}）—— 反应堆里可能没有 IT 模块"
+            exit 1
+          fi
+          if [ "${other_lines}" -ne 0 ]; then
+            echo "::error::出现了 ${other_lines} 条非 IT 的用例记录 —— it profile 的 surefire skip 失效，单测被重复执行"
+            grep -E 'Tests run:.*-- in ' it-verify.log | grep -vE '-- in cn\.ypbin\.iot\.it\.' | head
+            exit 1
+          fi
 
       - name: 归档 Failsafe 报告
         if: always()

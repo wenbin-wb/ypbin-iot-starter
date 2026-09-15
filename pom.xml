@@ -199,6 +199,12 @@
           必须在这里补 <modules>：显式激活任一 profile 都会让 activeByDefault 的
           dev-only 失效，不补的话 `-Pit verify` 的反应堆里**没有集成测试模块** ——
           命令会"成功"但一个 IT 都没跑（这正是「门禁空转」的经典形态）。
+
+          在这里**显式跳过 surefire**：`-Pit` 的语义就是「只跑集成测试」。
+          为什么不用命令行开关 `-Dsurefire.skip=true`：**它在本项目不生效**
+          （实测：CI 的 IT 作业日志里 11 个模块的 surefire 全部执行、没有任何
+          "Tests are skipped" 记录，等于把全量单测重复跑了一遍）。
+          放在 profile 配置里是声明式的，而且可以被 CI 的断言真正验证。
         -->
         <profile>
             <id>it</id>
@@ -206,6 +212,16 @@
                 <module>ypbin-iot-architecture-tests</module>
                 <module>ypbin-iot-integration-tests</module>
             </modules>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
 
         <!-- 供应链合规：生成 CycloneDX SBOM。显式带回架构测试模块，保证 SBOM 覆盖完整。 -->
