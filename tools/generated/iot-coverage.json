@@ -1,0 +1,78 @@
+{
+  "generatedBy": "tools/export-coverage.mjs",
+  "gate": {
+    "instruction": 0.8,
+    "branch": 0.64
+  },
+  "note": "覆盖率存在执行波动（同一提交两次全量运行实测差 0.04~0.78pp），本文件只记录最近一次实测值，不参与门禁判定；阈值由 pom 的 jacoco-check 强制执行。",
+  "excludedNoDataModules": [
+    "ypbin-iot-architecture-tests"
+  ],
+  "moduleCount": 8,
+  "modules": [
+    {
+      "module": "ypbin-iot-core",
+      "classes": 44,
+      "instructionPct": 82.91,
+      "branchPct": 66.97,
+      "instructionMarginPp": 2.91,
+      "branchMarginPp": 2.97
+    },
+    {
+      "module": "ypbin-iot-spring-boot-starter",
+      "classes": 15,
+      "instructionPct": 89.54,
+      "branchPct": 67.15,
+      "instructionMarginPp": 9.54,
+      "branchMarginPp": 3.15
+    },
+    {
+      "module": "ypbin-iot-protocol-modbus",
+      "classes": 9,
+      "instructionPct": 82.34,
+      "branchPct": 67.56,
+      "instructionMarginPp": 2.34,
+      "branchMarginPp": 3.56
+    },
+    {
+      "module": "ypbin-iot-runtime",
+      "classes": 21,
+      "instructionPct": 82.73,
+      "branchPct": 68.81,
+      "instructionMarginPp": 2.73,
+      "branchMarginPp": 4.81
+    },
+    {
+      "module": "ypbin-iot-protocol-opcua",
+      "classes": 12,
+      "instructionPct": 83.59,
+      "branchPct": 68.99,
+      "instructionMarginPp": 3.59,
+      "branchMarginPp": 4.99
+    },
+    {
+      "module": "ypbin-iot-transport",
+      "classes": 7,
+      "instructionPct": 81.19,
+      "branchPct": 71.7,
+      "instructionMarginPp": 1.19,
+      "branchMarginPp": 7.7
+    },
+    {
+      "module": "ypbin-iot-protocol-tcp",
+      "classes": 7,
+      "instructionPct": 86.17,
+      "branchPct": 73.4,
+      "instructionMarginPp": 6.17,
+      "branchMarginPp": 9.4
+    },
+    {
+      "module": "ypbin-iot-protocol-mqtt",
+      "classes": 8,
+      "instructionPct": 89.25,
+      "branchPct": 84.08,
+      "instructionMarginPp": 9.25,
+      "branchMarginPp": 20.08
+    }
+  ]
+}
