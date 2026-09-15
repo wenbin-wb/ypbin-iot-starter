@@ -33,14 +33,24 @@ trap 'rm -f "$LOG"' EXIT
 # （真实发生过：本地仓库里的旧快照是 NullAway 0.11.3，而声明版本是 0.14.1，
 #   前者把 4 处违规放过去了）。
 # 注：本仓父 pom 现已钉**已发布正式版** 3.1.0，不再是快照；这条打印仍然保留——
-# 它防的是「本地仓库被同名旧制品覆盖」与「父版本被改回快照」这两种情况，
-# 因此脚本仍然在父 pom 缺失时显式失败。
+# 它防的是「本地仓库被同名旧制品覆盖」与「父版本被改回快照」这两种情况。
 PARENT_VERSION="$(grep -oP '(?<=<version>)[^<]+' <<< "$(sed -n '/<parent>/,/<\/parent>/p' pom.xml)" | head -1)"
 PARENT_POM="${HOME}/.m2/repository/cn/ypbin/ypbin-starter-dependencies/${PARENT_VERSION}/ypbin-starter-dependencies-${PARENT_VERSION}.pom"
+
+# ⚠️ 本脚本会作为 CI 的**第一步**运行（它内部是 clean compile，必须排在产出覆盖率的步骤之前），
+# 此时本地仓库往往是空的（首次运行 / 缓存未命中）——父 pom 还没被解析下来。
+# 因此缺失时先解析一次，而不是直接判失败（CI 上真的踩过：干净的 ~/.m2 让这里假失败）。
 if [ ! -f "$PARENT_POM" ]; then
-  echo "[nullaway] 失败：本地仓库没有父 pom ${PARENT_VERSION}" >&2
-  echo "  正式版应能自动从 Central 解析；若解析不到，检查网络与 ~/.m2/settings.xml 的镜像配置。" >&2
-  echo "  （本仓已不再依赖未发布的 SNAPSHOT 父 pom，无需先安装母仓。）" >&2
+  echo "[nullaway] 本地仓库还没有父 pom ${PARENT_VERSION}（CI 首次运行属正常），先解析一次……"
+  if ! mvn -B -ntp -N -q validate >/dev/null 2>&1; then
+    echo "[nullaway] 失败：无法解析父 pom ${PARENT_VERSION}" >&2
+    echo "  正式版应从 Central 自动解析；请检查网络与 ~/.m2/settings.xml 的镜像配置。" >&2
+    exit 1
+  fi
+fi
+if [ ! -f "$PARENT_POM" ]; then
+  echo "[nullaway] 失败：解析后本地仓库仍没有父 pom ${PARENT_VERSION}" >&2
+  echo "  本仓已不再依赖未发布的 SNAPSHOT 父 pom，无需先安装母仓。" >&2
   exit 1
 fi
 ANALYZER_VERSION="$(grep -oP '(?<=<nullaway.version>)[^<]+' "$PARENT_POM" | head -1)"
