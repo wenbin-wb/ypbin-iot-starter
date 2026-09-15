@@ -1,9 +1,10 @@
 # ypbin-iot-starter
 
-<!-- 仓库当前是**私有**的：徽章只对已登录且有权限的用户可见，
-     匿名访问会显示为破图。仓库转公开后无需改动本段，徽章自动生效。 -->
+<!-- 仓库当前是**私有**的：徽章只对已登录且有权限的用户可见，匿名访问会显示为破图；
+     仓库转公开后无需改动本段，徽章自动生效。
+     CodeQL 徽章暂不展示：私有仓库的 code scanning 需要 GitHub Advanced Security，
+     该工作流目前只支持手动触发（见 .github/workflows/codeql.yml 顶部说明）。 -->
 [![CI](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml)
 
 > 多协议物联网接入框架 Spring Boot Starter —— **JDK 21 · Spring Boot 4.1 · Netty 4.1**
 > 目标：单机 10 万连接，集群千万级。
