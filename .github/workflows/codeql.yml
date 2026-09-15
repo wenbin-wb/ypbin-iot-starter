@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
   security-events: write
+  # CodeQL 在分析后会去读 workflow run 信息（遥测）；**仓库转私有后**默认 token
+  # 不再具备该权限，会以「Resource not accessible by integration」+「configuration error」失败
+  # （实测：公开时绿、转私有后红）。显式声明 actions: read 即可。
+  actions: read
 
 jobs:
   analyze:
