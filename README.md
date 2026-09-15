@@ -250,11 +250,20 @@ cd ../ypbin-iot-starter && mvn clean test
 ## 构建
 
 ```bash
-mvn -DskipTests install        # 全量构建
-mvn -pl ypbin-iot-core test    # 单模块测试
-mvn -Pit verify                # 集成测试（协议模拟器）
+# 前置：父 pom 是未发布的 SNAPSHOT，首次构建前必须先装母仓（见上「构建前置」）
+cd ../ypbin-starter && mvn -pl ypbin-starter-dependencies install -DskipTests && cd -
+
+mvn -pl <模块> -am test        # 单模块测试（**必须带 -am**：不带会用 ~/.m2 里的旧制品，产出假失败）
+mvn clean test                 # 全量单元测试 + 覆盖率门禁（不含任何 -P：这是唯一会跑架构门禁的方式）
+tools/check-nullaway.sh        # 空值语义门禁（会打印实际生效的分析器版本）
+mvn -Pdep-convergence validate # 依赖版本收敛
 mvn -Psbom verify              # 生成 SBOM
+tools/preflight.sh             # 发布前总检（按正确顺序把上述门禁各跑一遍）
 ```
+
+> **`-Pit` 目前是空转**：本仓还没有任何 `*IT.java`，`mvn -Pit verify` 不会执行任何集成测试。
+> 协议侧的端到端验证目前都在各协议模块的单测里（自带本地模拟器/broker/服务端），
+> 因此**没有**把 `-Pit` 列进上面的命令。集成测试体系见 `ROADMAP.md`。
 
 ---
 

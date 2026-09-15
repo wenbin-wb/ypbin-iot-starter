@@ -179,11 +179,6 @@ public record OpcUaProperties(
     }
 
     /**
-     * 是否信任全部服务端证书。
-     *
-     * @return 开启返回 {@code true}
-     */
-    /**
      * 是否校验服务端证书的主机名。
      *
      * @return 开启返回 {@code true}
@@ -192,6 +187,11 @@ public record OpcUaProperties(
         return Boolean.TRUE.equals(verifyHostname);
     }
 
+    /**
+     * 是否信任全部服务端证书（**仅开发环境**）。
+     *
+     * @return 开启返回 {@code true}
+     */
     public boolean isTrustAll() {
         return Boolean.TRUE.equals(trustAll);
     }

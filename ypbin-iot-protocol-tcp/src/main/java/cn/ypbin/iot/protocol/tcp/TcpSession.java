@@ -229,8 +229,9 @@ public final class TcpSession implements DeviceSession {
     /**
      * 摘除该订阅注册的帧监听器。
      *
-     * <p>订阅在 {@code start} 之前被取消时从未注册过监听器，此处跳过——
-     * 直接传空会给 {@code removeFrameListener} 一个无意义的参数。</p>
+     * <p>判空是<b>防御性</b>的：正常路径下 {@code subscribe()} 里 {@code attach()} 必先于
+     * {@code subscriptions.put(...)}，所以订阅一旦在册就一定有消费者。留着判空是为了让
+     * 「未来某条新路径漏了 attach」表现为「少摘一个监听器」而不是抛错。</p>
      *
      * @param subscription 订阅
      */

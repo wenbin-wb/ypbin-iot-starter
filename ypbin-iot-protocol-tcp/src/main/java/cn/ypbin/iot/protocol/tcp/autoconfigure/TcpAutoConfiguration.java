@@ -56,7 +56,8 @@ public class TcpAutoConfiguration {
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     public NettyTransport iotTcpTransport(TcpProperties properties) {
-        int workerThreads = properties.workerThreads() == null ? 0 : properties.workerThreads();
+        // workerThreads 的归一化在 TcpProperties 的访问器里，这里不再重复判空
+        int workerThreads = properties.workerThreads();
         log.debug("[ypbin-iot] iotTcpTransport configured (framing={}).", properties.framingMode());
         return new NettyTransport(workerThreads, properties.toFramingSpec());
     }

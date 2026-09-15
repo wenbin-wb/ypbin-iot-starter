@@ -84,6 +84,14 @@ public final class ConnectionRegistry implements AutoCloseable {
 
     private final ConcurrentMap<String, CompletableFuture<Entry>> entries = new ConcurrentHashMap<>();
 
+    /**
+     * {@code acquire} 里的兜底目标：该分支实际不可达（{@code staleFailure} 会提前 return）。
+     * 用静态常量避免每次 acquire 都构造异常并填栈。
+     */
+    private static final CompletableFuture<Entry> UNREACHABLE_TARGET = Stages.failed(
+            new ConnectionException("unreachable", IotMessageKeys.CONNECTION_FAILED,
+                    "no connection path was selected"));
+
     /** 保护 {@link #closed} 与「入表 + 发起建链 / 快照清表」的原子性。 */
     private final ReentrantReadWriteLock lifecycle = new ReentrantReadWriteLock();
 
@@ -271,10 +279,9 @@ public final class ConnectionRegistry implements AutoCloseable {
         }
         CompletableFuture<Entry> fresh = new CompletableFuture<>();
         // 不用 null 兜底：null 会让后续 target.thenCompose 变成可达的空解引用。
-        // 该默认值实际不可达（staleFailure 分支在上面就 return 了），
-        // 一旦真被用到会给出明确原因，而不是 NPE。
-        CompletableFuture<Entry> target = Stages.failed(new ConnectionException(key,
-                IotMessageKeys.CONNECTION_FAILED, "no connection path was selected"));
+        // 该默认值实际不可达（staleFailure 分支在上面就 return 了）；用**静态常量**而不是
+        // 每次新建失败 future —— 否则每次 acquire（含完全正常的路径）都会构造一个异常对象并填栈。
+        CompletableFuture<Entry> target = UNREACHABLE_TARGET;
         boolean staleFailure = false;
         boolean mustOpen = false;
         lifecycle.readLock().lock();

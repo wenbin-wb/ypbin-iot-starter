@@ -192,11 +192,58 @@ class EgressRouterTest {
         assertThat(sink.points()).as("关闭后剩余数据必须被 flush，不能丢在内存里").isEqualTo(4);
     }
 
+    @Test
+    @DisplayName("EGRESS-10 同设备超批必须按 batchSize 拆分且不丢点、顺序不变（覆盖 coalesce 的溢出分支）")
+    void sameDeviceOverflowMustSplitWithoutLoss() throws Exception {
+        // coalesce 的溢出分支此前没有任何数据断言：唯一走到它的用例（EGRESS-09）没有 sink、
+        // 只断言「调用线程不阻塞」。这条用例把等价性钉成数据断言。
+        //
+        // 关键：**必须让一次 drain 里出现同设备的多批**，否则根本不进溢出分支
+        // （最初只发 2 批时就是这样 —— 变异测试证明那条写法抓不到丢点）。
+        // 因此发 20 批；批次多到足以让多个 drain 窗口里都出现同设备多批。
+        final int batches = 20;
+        final int pointsPerBatch = 10;
+        RecordingSink sink = new RecordingSink("sink");
+        EgressRouter router = new EgressRouter(pointsPerBatch, 10_000, EgressOverflowPolicy.DROP_OLDEST,
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(sink), List.of(),
+                Clock.systemUTC());
+        try {
+            for (int index = 0; index < batches; index++) {
+                router.emit(batch("d1", pointsPerBatch));
+            }
+            awaitPoints(sink, batches * pointsPerBatch);
+
+            assertThat(sink.received)
+                    .as("共 %d 点必须一个不少（溢出分支若在 rebuild 之前 clear，就会产出空批次而丢点）",
+                            batches * pointsPerBatch)
+                    .hasSize(batches * pointsPerBatch);
+            List<Integer> expected = IntStream.range(0, batches)
+                    .boxed()
+                    .flatMap(ignored -> IntStream.range(0, pointsPerBatch).boxed())
+                    .toList();
+            assertThat(sink.received.stream().map(PointValue::value).toList())
+                    .as("单设备内点位顺序必须保持（每批 0..9，批间按投递顺序）")
+                    .containsExactlyElementsOf(expected);
+        } finally {
+            router.close();
+        }
+    }
+
     private static DataBatch batch(String deviceId, int points) {
         List<PointValue> values = IntStream.range(0, points)
                 .mapToObj(index -> PointValue.good(PointAddress.of("p" + index), index, Instant.now()))
                 .toList();
         return new DataBatch(deviceId, CODE, "c1", Instant.now(), values);
+    }
+
+    private static void awaitPoints(RecordingSink sink, int expected) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (sink.received.size() >= expected) {
+                return;
+            }
+            sleep();
+        }
     }
 
     private static void awaitPoints(EgressRouter router, int expected) {
