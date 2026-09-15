@@ -24,8 +24,8 @@
 - ✅ `LICENSE` / `CHANGELOG` / `CONTRACT` / `CONTRIBUTING` / `RELEASING` / `ROADMAP`
 - ✅ CI（`ci.yml` / `codeql.yml` / `release.yml`，对齐母仓）
 - ✅ NullAway（`-Pnullaway` + `@NullMarked`）覆盖全部 8 个模块（0 违规，含执行自检）
-  - ✅ 父版本升到 `3.1.0-SNAPSHOT`（`nullaway` / `dep-convergence` profile 定义在父 pom，
-    2.2.3 没有它们；母仓发布 3.1.0 正式版后应改钉正式版）
+  - ✅ 父版本钉 **`3.1.0`（已发布正式版）**：拿到 `nullaway` / `dep-convergence` 两个 profile，
+    同时干净环境可直接构建（2.2.3 没有这些 profile）
   - ✅ 全 8 模块完成（core 40 / starter 10 / runtime 8 / tcp 8 / opcua 8 / transport 4 /
     modbus 2 / mqtt 2 处，全部按语义修，无一处 `@SuppressWarnings` 压制）
   - ✅ 依赖版本收敛（`-Pdep-convergence`，随父版本一并获得）
@@ -63,8 +63,6 @@
 - ⬜ **`-Pit` 是空转**：本仓没有任何 `*IT.java`，`mvn -Pit verify` 不执行任何集成测试。
   协议侧端到端验证暂时都在各协议模块单测里（自带模拟器/broker/服务端）；
   若要真正用起 IT 体系，需要把「跨模块 + 真实中间件」的场景拆出去。
-- ⬜ **CI 从未执行**：父 pom 是未发布的 SNAPSHOT，本仓也没有配置远端仓库；
-  在补齐这两项之前，`.github/workflows/` 的绿灯不构成验证。
 - ⬜ OPC UA：信任目录放「CA 签发的叶子」不可用（Milo 只把自签证书当信任锚）；
   `HOSTNAME` 已做成可选开关、`APPLICATION_URI` 保留，但两者的比对值取自服务端自述，
   **对主动 MITM 无防护**，真正的门闩只有信任列表。

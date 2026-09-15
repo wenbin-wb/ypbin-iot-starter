@@ -200,30 +200,25 @@ ypbin:
 
 ---
 
-## 构建前置（重要）
+## 构建
 
-本仓的父 pom 是 `cn.ypbin:ypbin-starter-dependencies:3.1.0-SNAPSHOT`，
-而**该快照并未发布到任何远程仓库**（Central 上只有正式版）。因此**干净环境无法直接构建**，
-必须先把母仓的父 pom 装进本地仓库：
+父 pom 钉的是母仓的**已发布正式版**（`cn.ypbin:ypbin-starter-dependencies:3.1.0`，
+Central 可解析），因此**干净环境可直接构建**，无需先装母仓。
 
 ```bash
-# 先构建母仓的父 pom（只需一次；母仓改动后需重装）
-cd ../ypbin-starter && mvn -pl ypbin-starter-dependencies install -DskipTests
-# 再构建本仓
-cd ../ypbin-iot-starter && mvn clean test
+mvn -pl <模块> -am test        # 单模块测试（**必须带 -am**：不带会用 ~/.m2 里的旧制品，产出假失败）
+mvn clean test                 # 全量单元测试 + 覆盖率门禁（不含任何 -P：这是唯一会跑架构门禁的方式）
+tools/check-nullaway.sh        # 空值语义门禁（会打印实际生效的分析器版本）
+mvn -Pdep-convergence validate # 依赖版本收敛
+mvn -Psbom verify              # 生成 SBOM
+tools/preflight.sh             # 发布前总检（按正确顺序把上述门禁各跑一遍）
 ```
 
-> **为什么选 SNAPSHOT 父版本**：`nullaway` / `dep-convergence` 等门禁 profile 定义在父 pom 里，
-> 而最新的**已发布版**（2.2.3）没有它们。取舍是「拿到门禁」换「失去干净环境可复现性」。
-> 母仓发布 3.1.0 正式版后，**应立刻把父版本改钉 `3.1.0`**，届时本节可删。
+> **`-Pit` 目前是空转**：本仓还没有任何 `*IT.java`，`mvn -Pit verify` 不会执行任何集成测试。
+> 协议侧的端到端验证目前都在各协议模块的单测里（自带本地模拟器/broker/服务端）。
 >
-> ⚠️ **旧快照会跑出假绿**：`~/.m2` 里若残留旧的 3.1.0-SNAPSHOT（曾出现过 NullAway 0.11.3 的版本），
-> 门禁会用旧分析器跑并通过。`tools/check-nullaway.sh` 会**打印实际生效的分析器版本**，
-> 并在父 pom 缺失时直接失败——请以那行输出为准。
-
-> **CI 状态**：`.github/workflows/` 下的工作流**已就位但从未执行过**（本仓当前没有配置远端仓库）。
-> 在配置远端、且母仓的父 pom 可被 CI 获取之前，本文件中所有「CI 门禁」都只是待执行脚本，
-> **不构成已验证的证据**。
+> **子模块测试 vs 全量**：`-pl X test`（不带 `-am`）会用 `~/.m2` 里的**旧制品**跑测试，
+> 可能产出与全量构建不同的失败 —— 判定「是否回归」一律以 `mvn clean test` 或带 `-am` 的命令为准。
 
 ## 与 `ypbin-starter` 的关系
 
@@ -233,7 +228,7 @@ cd ../ypbin-iot-starter && mvn clean test
 <parent>
     <groupId>cn.ypbin</groupId>
     <artifactId>ypbin-starter-dependencies</artifactId>
-    <version>3.1.0-SNAPSHOT</version>
+    <version>3.1.0</version>
 </parent>
 ```
 
@@ -244,26 +239,6 @@ cd ../ypbin-iot-starter && mvn clean test
 | 依赖复用 | `-spring-boot-starter` 模块可复用 `SpringUtils` / `R` / `BusinessException`；core/runtime 不复用 |
 | 功能重叠 | 母仓 `messaging` 的 MQTT 面向**应用消息推送**，本仓 `protocol-mqtt` 面向**设备接入**，语义与生命周期不同，两者并存 |
 | 集成 admin | admin 引入 BOM + 所需协议模块，实现 `DeviceRegistry` 与 `DataSink` 即可，无需改框架代码 |
-
----
-
-## 构建
-
-```bash
-# 前置：父 pom 是未发布的 SNAPSHOT，首次构建前必须先装母仓（见上「构建前置」）
-cd ../ypbin-starter && mvn -pl ypbin-starter-dependencies install -DskipTests && cd -
-
-mvn -pl <模块> -am test        # 单模块测试（**必须带 -am**：不带会用 ~/.m2 里的旧制品，产出假失败）
-mvn clean test                 # 全量单元测试 + 覆盖率门禁（不含任何 -P：这是唯一会跑架构门禁的方式）
-tools/check-nullaway.sh        # 空值语义门禁（会打印实际生效的分析器版本）
-mvn -Pdep-convergence validate # 依赖版本收敛
-mvn -Psbom verify              # 生成 SBOM
-tools/preflight.sh             # 发布前总检（按正确顺序把上述门禁各跑一遍）
-```
-
-> **`-Pit` 目前是空转**：本仓还没有任何 `*IT.java`，`mvn -Pit verify` 不会执行任何集成测试。
-> 协议侧的端到端验证目前都在各协议模块的单测里（自带本地模拟器/broker/服务端），
-> 因此**没有**把 `-Pit` 列进上面的命令。集成测试体系见 `ROADMAP.md`。
 
 ---
 

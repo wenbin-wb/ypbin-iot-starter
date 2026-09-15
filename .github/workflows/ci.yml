@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [master, main]
 
-# ⚠️ 前置：本仓父 pom 是未发布的 SNAPSHOT，CI 需要先能获取它（见 README「构建前置」）。
-# 在补齐该前置之前，本工作流会卡在父 POM 解析 —— 它目前**从未成功执行过**。
-
 permissions:
   contents: read
 
