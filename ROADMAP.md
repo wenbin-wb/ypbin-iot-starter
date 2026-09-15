@@ -23,18 +23,28 @@
 - ✅ 非发布模块隔离（`dev-only` profile）+ `ModulePublishingTest` 门禁
 - ✅ `LICENSE` / `CHANGELOG` / `CONTRACT` / `CONTRIBUTING` / `RELEASING` / `ROADMAP`
 - ✅ CI（`ci.yml` / `codeql.yml` / `release.yml`，对齐母仓）+ 独立的**集成测试作业**（`-Pit`）
+  - ✅ 覆盖率的**步骤顺序不变量**：会 `clean` 的步骤（NullAway 内部就是 `clean compile`）必须排在
+    「产出覆盖率报告」的构建步骤之前，否则 `target/site/jacoco/` 会被删光，
+    归档步骤会「success 但零产物」（2026-09-15 实测事故：日志出现
+    `No files were found with the provided path: **/target/site/jacoco/`）。
+    现在既有顺序保证，也有**归档前断言**（`jacoco.csv < 8` 即失败）。
+  - ✅ `-Pit` = 只跑集成测试：`it` profile 里**显式跳过 surefire**。
+    早期用的 `-Dsurefire.skip=true` 在本项目**不生效**（CI 日志里 11 个模块的 surefire 全跑），
+    现已改为声明式配置，并由 CI 断言守着「surefire 不得出现用例记录」。
 - ✅ NullAway（`-Pnullaway` + `@NullMarked`）覆盖全部 8 个模块（0 违规，含执行自检）
   - ✅ 父版本钉 **`3.1.0`（已发布正式版）**：拿到 `nullaway` / `dep-convergence` 两个 profile，
     同时干净环境可直接构建（2.2.3 没有这些 profile）
   - ✅ 全 8 模块完成（core 40 / starter 10 / runtime 8 / tcp 8 / opcua 8 / transport 4 /
     modbus 2 / mqtt 2 处，全部按语义修，无一处 `@SuppressWarnings` 压制）
   - ✅ 依赖版本收敛（`-Pdep-convergence`，随父版本一并获得）
-- ⬜ ArchUnit 补齐母仓有而本仓缺的门禁
+- ✅ ArchUnit 补齐母仓有而本仓缺的门禁（本清单即当时的差距全集，4 项已全部闭环；
+  母仓后续新增门禁时需重新评估）
   - ✅ 模块发布边界（`ModulePublishingTest`，已反向验证）
   - ✅ 配置元数据（`ConfigMetadataTest`，已反向验证）
   - ✅ 注册发现：**已有**（`IotAutoConfigurationTest.CFG-08` 已做 SpringFactoriesLoader 发现，不重复建设）
   - ✅ 编码规则（printStackTrace/System.out/字段注入/Collections）：**已有**（`ARCH-05`）
-- ✅ `tools/`：`check-nullaway.sh`（含执行自检）、`export-config-metadata.mjs`（聚合 + 漂移门禁，已反向验证）、`preflight.sh`（发布前总检）
+- ✅ `tools/`：`check-nullaway.sh`（含执行自检）、`export-config-metadata.mjs`（聚合 + 漂移门禁 +
+  **模块集合不得静默缩小**）、`export-coverage.mjs`（覆盖率快照，由构建产物生成）、`preflight.sh`（发布前总检，8 步含集成测试）
 - ✅ 发布前置：GPG + `central-publishing-maven-plugin`（在根 pom 的 release profile；`-Prelease` 反应堆已实测不含非发布模块）
 - ⬜ 发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号
 
@@ -76,4 +86,11 @@
   其余 6 模块 0.00pp；`EGRESS-11` 把 EgressRouter 的 CAS 重试分支变成基本必然覆盖）。
   **未能完全收敛**：竞争态分支的命中取决于队列满/空状态，原理上无法用测试确定性钉死。
   门禁余量均大于波动，但 **runtime 的余量/波动比仅约 1.9 倍，是需盯着的一项**。
-- ⬜ `modbus` 与 `transport` 的分支覆盖余量偏薄（现约 +6% / +5%）。
+  > 补充（2026-09-15 独立复核）：同一提交上又观测到 `protocol-mqtt` 波动 0.63pp，
+  > 因此「其余 6 模块 0.00pp」只是**当时那 4 轮**的结论，不能当作「这些模块不会波动」。
+  > 结论：**覆盖率数值不设漂移门禁**（有波动必然假红），只有模块集合是确定性的、可门禁的
+  > —— 见 `tools/export-coverage.mjs --check`。
+- ⬜ 分支覆盖率余量偏薄：按最近一次实测（[`tools/generated/iot-coverage.json`](./tools/generated/iot-coverage.json)，
+  该文件由构建产物生成，**不要手工抄数字**），余量最薄的是 **`core`（约 +3.0pp）与
+  `spring-boot-starter`（约 +3.2~3.5pp）**，其后是 `modbus`；此前点名的 `transport` 其实偏厚。
+  门槛是 ≥ 0.64（防倒退下限，非目标），这三者是最先会被波动顶到红线的地方。

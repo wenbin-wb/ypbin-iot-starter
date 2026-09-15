@@ -1350,7 +1350,7 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 |---|---|
 | 位置 | `ypbin-iot-dependencies/pom.xml` 的 `<build><plugins>`，execution 级 `combine.self="override"` |
 | 定性 | **防倒退下限，不是目标**。它只保证「不许再掉」。目标统一提到 0.80 |
-| 当前基线 | core 66.3% / modbus 64.9% / mqtt 84.3% / opcua 67.3% / tcp 78.9% / runtime 67.8% / starter 67.3% |
+| 当前基线 | **不在此处登记数字**：逐模块实测值见 [`tools/generated/iot-coverage.json`](../tools/generated/iot-coverage.json)（由 `node tools/export-coverage.mjs` 从构建产物生成）。此处曾手抄一份基线，先后出现过 4 个互不一致的版本，且实测与任何一版都不吻合 |
 
 **为什么必须看分支**：本仓两次实证「行覆盖率达标但功能不可用」——90.5% 行覆盖下藏着
 「重连只生效一次」「重连阻塞全局定时器」两个 P0，它们都躺在未被执行的分支里。
@@ -1375,7 +1375,7 @@ DESIGN §5.4 承诺的 `ThreadIdentityGuard` 防线**全仓并不存在**。
 | P1 | **异步建链吞掉具体原因**：一切异常重包成 `connection.failed` | 测试实测：缺 keystore 报的是 `iot.common.connection.failed` | 领域异常原样抛出；超时单独成类 |
 | P1 | **含私钥的 KeyStore 静态无界缓存** + 反查证书设计 | 每次 `prepare` +1，永久持有私钥 | 改为直接返回 `KeyMaterial(keyPair, certificate)` |
 | P1 | **`EXTENDED_KEY_USAGE_END_ENTITY` 会拒掉 keytool 默认证书**（无 EKU 扩展） | 字节码实测 Milo 直接抛「ExtendedKeyUsage extension not found」，且错误被吞成 `connection.failed` | 去掉 EKU 校验，补回 `APPLICATION_URI`，并写明「信任目录只能放叶子证书」|
-| P1 | 覆盖率门禁对 `transport`/`iot-test` **静默空转**（无 `jacoco.exec` 时 JaCoCo 自身跳过） | Maven 日志逐模块 `Skipping JaCoCo execution due to missing execution data file` | **未修**（`transport` 目前零测试，属独立工作量），已登记 |
+| P1 | 覆盖率门禁对 `transport`/`iot-test` **静默空转**（无 `jacoco.exec` 时 JaCoCo 自身跳过） | Maven 日志逐模块 `Skipping JaCoCo execution due to missing execution data file` | ~~未修（`transport` 目前零测试）~~ → **已于后续轮次修复**，见本文件下方「传输底座补测试：覆盖门禁从『空转』变为真实生效」 |
 | P1 | 测试绿灯没测到点：5 处 probe 调用**没有一处**用 TLS/非 None/凭据配置去探测；`Stages.messageKeyOf` 两条分支未覆盖 | 复审逐项核对 | 已补 `OPC-03e` 与断言收紧；probe 的配置错误用例待补 |
 
 **这一轮最重要的一条是「交付宣称失实」**：我在 commit 5baa1fa 里写了「③ 完整落地」，
