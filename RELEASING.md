@@ -12,7 +12,8 @@
 | 非发布模块隔离 | ✅ | `ypbin-iot-architecture-tests` 由 `dev-only` profile 承载；**已实测**：`-Prelease` 的反应堆为 12 个模块、不含它。该不变量由 `ModulePublishingTest` 与 `release.yml` 双重守着 |
 | GPG 签名 + `central-publishing-maven-plugin` | ✅ 已配置 | 在根 pom 的 `release` profile（母仓的发布配置在其**根 pom**，不在已发布的父 pom，故本仓需独立声明）|
 | Central 凭据与 GPG 私钥 | ⬜ **需配置** | GitHub 仓库 secrets：`MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` / `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE`；并创建 `release` environment |
-| 首个正式版本 | ⬜ | `<revision>` 目前是 `0.1.0-SNAPSHOT`；发布前先改为 `0.1.0` |
+| 首个正式版本 | ⬜ **刻意暂缓** | `<revision>` 目前是 `0.1.0-SNAPSHOT`。**尚未在真实项目中验证过**，因此不发布；待有真实接入验证后再改 `0.1.0` |
+| 仓库可见性 | 私有 | 徽章只对已登录用户可见；转公开后自动生效 |
 
 > 发布工作流默认是 `dry-run`（只做前置校验与打包，不签名不上传）——
 > 在凭据配置完成前，**不会**出现「看起来发布了其实什么都没上传」的情况。

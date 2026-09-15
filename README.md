@@ -1,12 +1,15 @@
 # ypbin-iot-starter
 
+<!-- 仓库当前是**私有**的：徽章只对已登录且有权限的用户可见，
+     匿名访问会显示为破图。仓库转公开后无需改动本段，徽章自动生效。 -->
 [![CI](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml)
 
 > 多协议物联网接入框架 Spring Boot Starter —— **JDK 21 · Spring Boot 4.1 · Netty 4.1**
 > 目标：单机 10 万连接，集群千万级。
 
-> **当前状态：M1 主体已完成（2026-09-14）**。**尚未发布任何版本**（`0.1.0-SNAPSHOT`）。
+> **当前状态：M1 主体已完成（2026-09-14）**。**尚未发布任何版本**（`0.1.0-SNAPSHOT`）——
+> 尚未在真实项目中验证过，因此刻意不发布。
 > 12 个模块 `mvn clean test` 全绿，**341 个测试用例**（0 失败、7 跳过）。
 > 指令覆盖率：core 82.9% / runtime 82.9% / transport 81.2% / starter 88.7% /
 > protocol-tcp 87.7% / protocol-modbus 82.6% / protocol-mqtt 88.4% / protocol-opcua 83.3%。
