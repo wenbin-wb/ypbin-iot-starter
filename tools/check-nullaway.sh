@@ -29,14 +29,18 @@ LIST="$(IFS=,; echo "${MODULES[*]}")"
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
 
-# 父 pom 是 3.1.0-SNAPSHOT：~/.m2 里可能是**旧的快照**，那样门禁会用旧分析器跑出假绿
-# （真实发生过：旧快照是 NullAway 0.11.3，而声明版本是 0.14.1，前者把 4 处违规放过去了）。
-# 因此这里把「实际生效的分析器版本」打印出来，并在父 pom 未安装时显式失败。
+# 打印「实际生效的分析器版本」，避免用到旧分析器却以为门禁是绿的
+# （真实发生过：本地仓库里的旧快照是 NullAway 0.11.3，而声明版本是 0.14.1，
+#   前者把 4 处违规放过去了）。
+# 注：本仓父 pom 现已钉**已发布正式版** 3.1.0，不再是快照；这条打印仍然保留——
+# 它防的是「本地仓库被同名旧制品覆盖」与「父版本被改回快照」这两种情况，
+# 因此脚本仍然在父 pom 缺失时显式失败。
 PARENT_VERSION="$(grep -oP '(?<=<version>)[^<]+' <<< "$(sed -n '/<parent>/,/<\/parent>/p' pom.xml)" | head -1)"
 PARENT_POM="${HOME}/.m2/repository/cn/ypbin/ypbin-starter-dependencies/${PARENT_VERSION}/ypbin-starter-dependencies-${PARENT_VERSION}.pom"
 if [ ! -f "$PARENT_POM" ]; then
   echo "[nullaway] 失败：本地仓库没有父 pom ${PARENT_VERSION}" >&2
-  echo "  请先安装母仓：cd ../ypbin-starter && mvn -pl ypbin-starter-dependencies install -DskipTests" >&2
+  echo "  正式版应能自动从 Central 解析；若解析不到，检查网络与 ~/.m2/settings.xml 的镜像配置。" >&2
+  echo "  （本仓已不再依赖未发布的 SNAPSHOT 父 pom，无需先安装母仓。）" >&2
   exit 1
 fi
 ANALYZER_VERSION="$(grep -oP '(?<=<nullaway.version>)[^<]+' "$PARENT_POM" | head -1)"

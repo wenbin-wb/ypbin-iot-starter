@@ -21,8 +21,15 @@
 - **协议模块**：`protocol-tcp`（透传）、`protocol-modbus`（TCP/RTU，含 TLS fail-fast）、
   `protocol-mqtt`（MQTT 3.1.1）、`protocol-opcua`（含**安全策略与用户名密码认证**、
   浏览、原生订阅）。
+- **集成测试体系**（`ypbin-iot-integration-tests`，不发布）：完整 Spring Boot 上下文 + 嵌入式 broker
+  的端到端场景（自动装配 → 生命周期绑定 → 建链 → 订阅 → 中间件推送 → 出口），
+  由 `-Pit`（failsafe）执行、CI 有独立作业。**该体系上线即抓到「MQTT 二进制负载被静默损坏」这一真实缺陷。**
+- **OPC UA 信任模型与装配期诊断**：三条部署语义（自签证书=精确 pin / 自签 CA=信任该 CA 的一切 /
+  CA 签发的叶子不可用）经源码级确认，并在装配期给出诊断（`SEC-15`/`SEC-16` 反向验证）。
 - **工程门禁**：ArchUnit 架构约束（含规则有效性自检）、源码规范扫描、JaCoCo 指令 ≥0.80 与
-  **分支 ≥0.64**、spotless、依赖版本收敛、模块发布边界门禁。
+  **分支 ≥0.64**、spotless、依赖版本收敛、模块发布边界门禁、配置元数据漂移门禁
+  （含「模块集合不得静默缩小」）、**覆盖率快照由构建产物生成**（`tools/export-coverage.mjs`）、
+  CI 覆盖率归档前的存在性断言。
 
 ### 已知限制
 

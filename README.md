@@ -6,6 +6,7 @@
 
 > 多协议物联网接入框架 Spring Boot Starter —— **JDK 21 · Spring Boot 4.1 · Netty 4.1**
 > 目标：单机 10 万连接，集群千万级。
+
 ---
 
 > ## ⚠️ 开发阶段说明（请先读这一段）
@@ -18,7 +19,7 @@
 > | API 稳定性 | **不保证**。`1.0.0` 之前的公开接口可能随时变更，见 [`CONTRACT.md`](./CONTRACT.md) |
 > | 真实环境验证 | **尚未在真实项目中接入验证过** —— 现有证据全部来自本仓自带的模拟器/broker/服务端 |
 > | 协议覆盖 | TCP 透传 / Modbus(TCP+RTU) / MQTT 3.1.1 / OPC UA 四个；RTU 无真实硬件验证 |
-> | 工程质量 | CI 的门禁是**真的在跑**（构建 342+ 用例、架构约束、NullAway、覆盖率、依赖收敛、元数据漂移），详见下方「工程治理与质量门禁」 |
+> | 工程质量 | CI 的门禁是**真的在跑**：全量单测 + 集成测试 + 架构约束 + NullAway + 覆盖率 + 依赖收敛 + 元数据漂移。每个作业的分步结论见上方 **CI 徽章**（点进去能看到每一步的耗时，耗时即「确实跑了」的证据），门禁清单见下方「工程治理与质量门禁」 |
 >
 > **这意味着什么**：如果你要拿它做真实项目，请把它当作一个**需要自己补齐验证**的起点 ——
 > 先用 `probe()` 打通目标设备、按 `CONTRACT.md` 核对行为承诺、并在自己的环境里补一轮端到端测试。
@@ -26,22 +27,26 @@
 >
 > **已知限制**（详见 [`ROADMAP.md`](./ROADMAP.md) 与 [`docs/PROTOCOLS.md`](./docs/PROTOCOLS.md)）：
 > 指标桥需要宿主提供 `MeterRegistry`；OPC UA 信任目录只能放「自签证书」（精确 pin）或「自签 CA」（信任该 CA 签发的一切）——CA 签发的叶子当不了信任锚；
-> `HOSTNAME`/`APPLICATION_URI` 校验对主动 MITM 无防护；`-Pit` 集成测试目前是空转。
+> `HOSTNAME`/`APPLICATION_URI` 校验对主动 MITM 无防护；
+> 集成测试（`-Pit`）目前只有 5 个场景（MQTT 全链路 + 多协议并存），覆盖面还薄。
 
 
 
-> **当前状态：M1 主体已完成（2026-09-14）**。**尚未发布任何版本**（`0.1.0-SNAPSHOT`）——
+> **当前状态：M1 主体已完成**。**尚未发布任何版本**（`0.1.0-SNAPSHOT`）——
 > 尚未在真实项目中验证过，因此刻意不发布。
-> 12 个模块 `mvn clean test` 全绿，**341 个测试用例**（0 失败、7 跳过）。
-> 指令覆盖率：core 82.9% / runtime 82.9% / transport 81.2% / starter 88.7% /
-> protocol-tcp 87.7% / protocol-modbus 82.6% / protocol-mqtt 88.4% / protocol-opcua 83.3%。
+> 13 个 Maven 模块 `mvn clean test` 全绿（其中 8 个模块受覆盖率门禁约束），
+> 另有 `mvn -Pit verify` 的集成测试套件。
+> **逐模块实测覆盖率见 [`tools/generated/iot-coverage.json`](./tools/generated/iot-coverage.json)** ——
+> 由 `node tools/export-coverage.mjs` 从构建产物生成，这里不再手抄数字
+> （手抄的覆盖率数字在本仓已经漂移过不止一次，且同一份数据曾出现 4 个互不一致的版本）。
 >
 > **已实现**：`iot-core`（契约层，零 Spring/零 Netty）· `iot-runtime`（单飞建链连接复用、微批出口、
 > 有界回调投递、双执行器调度）· `iot-transport`（Netty 底座）· `iot-spring-boot-starter`
 > （条件装配 + 生命周期编排 + **断线指数退避重连**）· `iot-protocol-tcp` ·
 > `iot-protocol-modbus`（TCP/RTU）· `iot-protocol-mqtt`（3.1.1）·
 > `iot-protocol-opcua`（含**安全策略/证书认证/用户名密码**，加密会话端到端可用）·
-> `iot-test`（TCK 一致性测试套件）· `iot-architecture-tests`（ArchUnit 约束，**含规则有效性自检**）。
+> `iot-test`（TCK 一致性测试套件）· `iot-architecture-tests`（ArchUnit 约束，**含规则有效性自检**）·
+> `iot-integration-tests`（集成测试：完整 Spring Boot 上下文 + 嵌入式 broker）。
 >
 > **下一步**：见 [ROADMAP.md](./ROADMAP.md)（协议扩容、指标桥、发布前置）。
 
@@ -56,10 +61,12 @@
 | 源码规范 | 禁内联 FQCN、`@Bean` 覆盖语义、autoconfig 注册、禁 `ordinal()` | 同上（`SourceConventionTest`） |
 | 模块发布边界 | 非发布模块必须由 `dev-only` profile 承载 | 同上（`ModulePublishingTest`） |
 | 配置元数据 | 每个带 `@ConfigurationProperties` 的模块都必须产出元数据；前缀齐全；协议模块必须在 arch-tests classpath 上 | 同上（`ConfigMetadataTest` CFGMETA-01~05） |
-| 配置元数据漂移 | 提交的聚合元数据必须与构建产物一致 | `node tools/export-config-metadata.mjs --check` |
-| 覆盖率 | 指令 ≥ 0.80、**分支 ≥ 0.64**（防倒退下限，非目标） | `mvn -pl <模块> -am test` |
-| 空值语义（NullAway） | 8 个模块参与；**含「门禁是否真的执行过」自检**，并打印实际生效的分析器版本（父 pom 是 SNAPSHOT，旧快照会跑出假绿）| `tools/check-nullaway.sh` |
+| 配置元数据漂移 | 提交的聚合元数据必须与构建产物一致；且**模块集合不得静默缩小**（防止局部构建把基线拉低） | `node tools/export-config-metadata.mjs --check` |
+| 覆盖率 | 指令 ≥ 0.80、**分支 ≥ 0.64**（防倒退下限，非目标） | `mvn clean test`（全量；单模块要带 `-am`） |
+| 覆盖率快照 | 快照的模块集合必须与构建产物一致（**数值不设门禁**：同一提交两次运行实测差 0.04~0.78pp） | `node tools/export-coverage.mjs --check` |
+| 空值语义（NullAway） | 8 个模块参与；**含「门禁是否真的执行过」自检**，并打印实际生效的分析器版本（本地仓库被旧快照覆盖时会跑出假绿） | `tools/check-nullaway.sh` |
 | 依赖版本收敛 | enforcer `dependencyConvergence` | `mvn -Pdep-convergence validate` |
+| 集成测试 | `*IT.java`：完整 Spring Boot 上下文 + 嵌入式 broker；`-Pit` 语义是**只跑集成测试**（profile 里显式跳过 surefire） | `mvn -Pit verify` |
 | 供应链 | CycloneDX SBOM | `mvn -Psbom verify -DskipTests` |
 | 代码风格 | spotless（Apache 头、导入顺序、去尾空格） | `mvn spotless:apply` |
 | 发布前总检 | 按正确顺序把上述门禁各跑一遍（`-P` 会关掉架构门禁，不能合并） | `tools/preflight.sh` |
@@ -172,14 +179,23 @@ ypbin:
 > 前七者无成熟 Java 库，推荐路径是**硬件网关转换**后再接入本仓；
 > 后二者库成熟但与「设备接入」的语义边界需先定义。评估口径见[选型文档 §2.11](./docs/PROTOCOLS.md)。
 
-### 治理与测试（不发布）
+### 治理与测试
 
-| 模块 | 职责 |
-|---|---|
-| `ypbin-iot-dependencies` | IoT 三方库版本集中管理 + 全模块 parent |
-| `ypbin-iot-bom` | 对外统一 BOM |
-| `ypbin-iot-architecture-tests` | ArchUnit 约束：契约层零 Spring、协议互不依赖、装配规则 |
-| `ypbin-iot-test` | 协议一致性测试套件（TCK）+ 协议模拟器 |
+| 模块 | 职责 | 发布 |
+|---|---|---|
+| `ypbin-iot-dependencies` | IoT 三方库版本集中管理 + 全模块 parent | ✅ 会发布（与母仓同模式） |
+| `ypbin-iot-bom` | 对外统一 BOM：宿主 `import` 一次即可管理全部 `ypbin-iot-*` 版本 | ✅ 会发布 |
+| `ypbin-iot-test` | 协议一致性测试套件（TCK），供协议作者写一致性测试 | ✅ 会发布（见下方说明） |
+| `ypbin-iot-architecture-tests` | ArchUnit 约束：契约层零 Spring、协议互不依赖、装配规则 | ❌ 不发布（`maven.deploy.skip` + `dev-only` profile） |
+| `ypbin-iot-integration-tests` | 集成测试：完整 Spring Boot 上下文 + 嵌入式 broker | ❌ 不发布（同上） |
+
+> **发布边界一律以 pom 为准**（本节曾与 `RELEASING.md` 口径不一致，已按 pom 事实修正）：
+> 只有 `architecture-tests` 与 `integration-tests` 声明了 `maven.deploy.skip=true`，
+> 并由 `dev-only` profile 承载、被 `-Prelease` 排除；其余模块（含 `-dependencies` / `-bom` / `-test`）都会发布。
+> 该边界由 `ModulePublishingTest` 强制。完整清单见 [`RELEASING.md`](./RELEASING.md) 第三节。
+>
+> `ypbin-iot-test` 的 JUnit / AssertJ 是 **compile 作用域**（协议模块的 TCK 子类需要它们），
+> 发布后会被传递引入 —— 这是**有意为之**：它是测试基座，宿主不应在生产代码里依赖它。
 
 ---
 
@@ -242,12 +258,19 @@ mvn -Psbom verify              # 生成 SBOM
 tools/preflight.sh             # 发布前总检（按正确顺序把上述门禁各跑一遍）
 ```
 
-> **CI 已实测通过**（首次运行）：8 个步骤全部真实执行 —— 全量构建与单测 124s、
-> NullAway 26s、依赖收敛 4s、元数据漂移校验、SBOM 生成 26s（耗时即「确实跑了」的证据）。
+> **CI 的结论请直接看徽章，不要抄进文档**：CI 分为 `build`（架构约束 / NullAway / 覆盖率 / 依赖收敛 /
+> 元数据漂移 / SBOM）与 `integration-tests`（`-Pit`）两个作业，每个步骤的真实执行情况与耗时
+> 都能在运行页逐条核对。本 README 不再登记「N 个步骤 / 多少秒」这类快照 —— 它们必然滞后
+> （此前写过 341 与 342 两个用例数，实际都不是；也写过「8 个步骤」，而作业结构早就变了）。
 >
 ```bash
-mvn -Pit -Dsurefire.skip=true verify   # 集成测试（*IT.java，完整 Spring Boot 上下文 + 嵌入式 broker）
+mvn -Pit verify                # 集成测试（*IT.java，完整 Spring Boot 上下文 + 嵌入式 broker）
 ```
+
+> **`-Pit` 的语义是「只跑集成测试」**：根 pom 的 `it` profile 里**显式跳过 surefire**，
+> 所以它不会把单测重复跑一遍。早期这里写的是 `-Dsurefire.skip=true`，但**该开关在本项目不生效**
+> （实测 CI 日志里 11 个模块的 surefire 全部执行、没有任何 `Tests are skipped`）；
+> 现已改为声明式的 profile 配置，并加了 CI 断言守着「surefire 不得有用例记录」。
 
 > **集成测试**在 `ypbin-iot-integration-tests`（不发布，由 `it` / `dev-only` profile 承载）：
 > 用完整 Spring Boot 上下文跑端到端场景（自动装配 → 生命周期绑定 → 建链 → 订阅 →

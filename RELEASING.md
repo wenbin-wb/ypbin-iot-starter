@@ -9,7 +9,7 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | `LICENSE` | ✅ | Apache 2.0 |
-| 非发布模块隔离 | ✅ | `ypbin-iot-architecture-tests` 由 `dev-only` profile 承载；**已实测**：`-Prelease` 的反应堆为 12 个模块、不含它。该不变量由 `ModulePublishingTest` 与 `release.yml` 双重守着 |
+| 非发布模块隔离 | ✅ | `ypbin-iot-architecture-tests` 与 `ypbin-iot-integration-tests` 由 `dev-only` profile 承载；**已实测**：`-Prelease` 的反应堆为 12 个项目、两者均不在其中。该不变量由 `ModulePublishingTest` 与 `release.yml` 双重守着 |
 | GPG 签名 + `central-publishing-maven-plugin` | ✅ 已配置 | 在根 pom 的 `release` profile（母仓的发布配置在其**根 pom**，不在已发布的父 pom，故本仓需独立声明）|
 | Central 凭据与 GPG 私钥 | ⬜ **需配置** | GitHub 仓库 secrets：`MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` / `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE`；并创建 `release` environment |
 | 首个正式版本 | ⬜ **刻意暂缓** | `<revision>` 目前是 `0.1.0-SNAPSHOT`。**尚未在真实项目中验证过**，因此不发布；待有真实接入验证后再改 `0.1.0` |
@@ -25,7 +25,7 @@
 | 父 pom 获取 | ✅ 钉的是已发布正式版 `3.1.0`（Central 可解析），CI 可直接构建 |
 | 远端仓库 | ✅ 已配置（`github.com/wenbin-wb/ypbin-iot-starter`） |
 | 工作流 | `.github/workflows/` 的 ci / codeql / release 已接入（release 默认 dry-run）|
-| 首次 CI 运行 | ✅ 已通过（8 个步骤全部真实执行：构建 124s / NullAway 26s / 依赖收敛 / 元数据 / SBOM 26s）|
+| 首次 CI 运行 | ✅ 已通过；**具体步骤与耗时请看 Actions 运行页**（这里的「8 个步骤 / 124s」是首次运行的快照，作业结构后来已变为 build + integration-tests 两个作业，故不再在此登记数字）|
 
 ## 二、每次发布
 
@@ -42,10 +42,16 @@
 
 ## 三、模块边界（发布前必须核对）
 
-- **会发布**：`ypbin-iot-core`、`-runtime`、`-transport`、`-spring-boot-starter`、
-  `-protocol-{tcp,modbus,mqtt,opcua}`、`-test`（TCK 基座，协议作者需要）、`-bom`。
-- **不发布**：`ypbin-iot-architecture-tests`（声明 `maven.deploy.skip=true`，由 `dev-only` profile 承载）。
+**以 pom 为准**（本节曾漏掉 `integration-tests`，与 README 的口径也不一致；现已对齐）：
+
+- **会发布**：`ypbin-iot-dependencies`（parent）、`-bom`（对外 BOM）、`-core`、`-runtime`、`-transport`、
+  `-spring-boot-starter`、`-protocol-{tcp,modbus,mqtt,opcua}`、`-test`（TCK 基座，协议作者需要）。
+- **不发布**（均声明 `maven.deploy.skip=true`，由 `dev-only` profile 承载）：
+  `ypbin-iot-architecture-tests`、`ypbin-iot-integration-tests`。
 - 该边界由 `ModulePublishingTest` 强制：把非发布模块写回顶层 `<modules>` 会让构建失败。
+- ⚠️ `-test` 的 JUnit / AssertJ 是 **compile 作用域**（协议模块的 TCK 子类依赖它们），
+  发布后会被**传递**给依赖方 —— 这是有意为之（它是测试基座），但也意味着
+  **生产代码不应依赖 `ypbin-iot-test`**。
 
 ## 四、版本迭代规范
 
