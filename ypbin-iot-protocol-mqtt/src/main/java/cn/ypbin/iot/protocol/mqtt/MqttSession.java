@@ -28,6 +28,7 @@ import cn.ypbin.iot.core.model.PointAddress;
 import cn.ypbin.iot.core.model.PointValue;
 import cn.ypbin.iot.core.model.PointWrite;
 import cn.ypbin.iot.core.model.PointWriteStatus;
+import cn.ypbin.iot.core.model.Quality;
 import cn.ypbin.iot.core.model.ReadRequest;
 import cn.ypbin.iot.core.model.ReadResult;
 import cn.ypbin.iot.core.model.SessionState;
@@ -87,6 +88,8 @@ final class MqttSession implements DeviceSession {
 
     private final boolean retainedDefault;
 
+    private final MqttPayloadFormat payloadFormat;
+
     private final Instant boundAt;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -108,12 +111,13 @@ final class MqttSession implements DeviceSession {
      * @param retainedDefault  发布是否默认保留
      */
     MqttSession(DeviceSpec device, MqttConnection connection, AdapterContext context, int defaultQos,
-            boolean retainedDefault) {
+            boolean retainedDefault, MqttPayloadFormat payloadFormat) {
         this.device = device;
         this.connection = connection;
         this.context = context;
         this.defaultQos = defaultQos;
         this.retainedDefault = retainedDefault;
+        this.payloadFormat = payloadFormat;
         this.boundAt = context.clock().instant();
         this.sessionId = device.deviceId() + "@" + connection.connectionId();
     }
@@ -343,8 +347,8 @@ final class MqttSession implements DeviceSession {
         context.log(LogLevel.DEBUG, MqttAdapter.MSG_MATCHED, matched, topic);
         // 投递值的地址用「实际主题」而不是订阅过滤器：
         // 宿主需要知道这条数据具体来自哪个主题，而 '#'/'+' 过滤器本身不是有效主题
-        String payload = new String(publish.getPayloadAsBytes(), StandardCharsets.UTF_8);
-        PointValue point = PointValue.good(PointAddress.of(topic), payload, context.clock().instant());
+        byte[] payloadBytes = publish.getPayloadAsBytes();
+        PointValue point = decode(topic, payloadBytes);
         subscription.delivered.incrementAndGet();
         context.metrics().recordSubscriptionBatch(1);
         if (subscription.listener != null) {
@@ -355,6 +359,52 @@ final class MqttSession implements DeviceSession {
         }
         context.egress().emit(new DataBatch(device.deviceId(), device.protocol(),
                 connection.connectionId(), context.clock().instant(), List.of(point)));
+    }
+
+    /**
+     * 按配置的格式解码负载。
+     *
+     * <p>关键点：{@code text} 模式下<b>不做</b>「一律 UTF-8 解码」——
+     * {@code new String(bytes, UTF_8)} 会把非法字节静默替换成 U+FFFD，
+     * 于是二进制负载在到达宿主前就已经变形，而链路全程报成功。
+     * 这里先用严格解码器判断，非法则产出 <b>BAD</b> 值并带上明确原因。</p>
+     *
+     * @param topic        实际主题
+     * @param payloadBytes 负载字节
+     * @return 点位值
+     */
+    private PointValue decode(String topic, byte[] payloadBytes) {
+        Instant now = context.clock().instant();
+        MqttPayloadFormat format = payloadFormat == null ? MqttPayloadFormat.TEXT : payloadFormat;
+        switch (format) {
+            case BINARY -> {
+                // 原样交付字节：不做任何解码，宿主自行按业务协议解析
+                return PointValue.good(PointAddress.of(topic), payloadBytes.clone(), now);
+            }
+            case NUMBER -> {
+                if (!MqttPayloadFormat.isValidUtf8(payloadBytes)) {
+                    return PointValue.bad(PointAddress.of(topic), Quality.BAD,
+                            MqttAdapter.MSG_PAYLOAD_NOT_UTF8, now);
+                }
+                String text = new String(payloadBytes, StandardCharsets.UTF_8).trim();
+                try {
+                    return PointValue.good(PointAddress.of(topic), Double.parseDouble(text), now);
+                } catch (NumberFormatException ex) {
+                    return PointValue.bad(PointAddress.of(topic), Quality.BAD,
+                            MqttAdapter.MSG_PAYLOAD_NOT_NUMBER, now);
+                }
+            }
+            default -> {
+                if (!MqttPayloadFormat.isValidUtf8(payloadBytes)) {
+                    // 以前这里会静默产出带 U+FFFD 的字符串；现在显式报 BAD，
+                    // 让「负载不是文本」这件事在数据面上可见
+                    return PointValue.bad(PointAddress.of(topic), Quality.BAD,
+                            MqttAdapter.MSG_PAYLOAD_NOT_UTF8, now);
+                }
+                return PointValue.good(PointAddress.of(topic),
+                        new String(payloadBytes, StandardCharsets.UTF_8), now);
+            }
+        }
     }
 
     @Override

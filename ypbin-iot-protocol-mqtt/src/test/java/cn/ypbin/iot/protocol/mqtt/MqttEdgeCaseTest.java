@@ -80,7 +80,7 @@ class MqttEdgeCaseTest {
         context = new DefaultAdapterContext(MqttAdapter.PROTOCOL_CODE,
                 DefaultAdapterSettings.defaults(), new NoopEgress(), scheduler,
                 NoopMetricsRecorder.INSTANCE, new EnvCredentialResolver(), Clock.systemUTC(), 32);
-        adapter = new MqttAdapter(new MqttProperties(null, null, null, 2, null));
+        adapter = new MqttAdapter(new MqttProperties(null, null, null, 2, null, null));
     }
 
     @AfterEach

@@ -8,7 +8,7 @@
     "ypbin-iot-protocol-tcp",
     "ypbin-iot-spring-boot-starter"
   ],
-  "propertyCount": 51,
+  "propertyCount": 52,
   "properties": [
     {
       "name": "ypbin.iot.connection.connect-rate-jitter",
@@ -158,6 +158,14 @@
       "name": "ypbin.iot.protocol.mqtt.enabled",
       "type": "java.lang.Boolean",
       "description": "协议开关",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.protocol.mqtt.autoconfigure.MqttProperties",
+      "module": "ypbin-iot-protocol-mqtt"
+    },
+    {
+      "name": "ypbin.iot.protocol.mqtt.payload-format",
+      "type": "cn.ypbin.iot.protocol.mqtt.MqttPayloadFormat",
+      "description": "",
       "defaultValue": null,
       "sourceType": "cn.ypbin.iot.protocol.mqtt.autoconfigure.MqttProperties",
       "module": "ypbin-iot-protocol-mqtt"

@@ -65,8 +65,8 @@
 
 - 🚧 **集成测试体系**：`ypbin-iot-integration-tests` 已落地（完整 Spring Boot 上下文 + 嵌入式 broker），
   走 `-Pit` + failsafe；已覆盖 MQTT 全链路与指标装配，待补多协议并存、重连后数据面恢复等场景
-- ⬜ **MQTT 二进制负载会被静默损坏**（由 IT 首跑发现）：适配器无条件按 UTF-8 解码，
-  非 UTF-8 负载会变成 U+FFFD 且链路仍报成功。建议加 `payload-format: text|number|binary`
+- ✅ **MQTT 二进制负载静默损坏已修**：新增 `payload-format: text|number|binary`；
+  `text` 模式下非法 UTF-8 产出 BAD（不再静默替换成 U+FFFD），`binary` 原样交付 `byte[]`
 - ✅ OPC UA 信任模型：机制已源码级确认并做成**装配期诊断**（`SEC-15`/`SEC-16` 反向验证）。
   三条部署语义已写进 `docs/PROTOCOLS.md`：自签证书=精确 pin、自签 CA=信任该 CA 的一切、
   CA 签发的叶子=不可用。**注意「CA + 指定叶子」并不能精确 pin**（反直觉但已实测）。

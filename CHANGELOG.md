@@ -33,6 +33,8 @@
   （Milo 只把自签证书当信任锚），需放自签叶子或整个 CA；两个可选校验
   （`HOSTNAME` / `APPLICATION_URI`）的比对值来自服务端自述，**对主动 MITM 无防护**。
 - **MQTT**：基线为 MQTT 3.1.1（MQTT 5 专属配置不支持）；不声明 `READ` 能力。
+  负载需按 `payload-format` 配置解码：`text`（默认，非法 UTF-8 产出 BAD 而非损坏字符串）、
+  `number`、`binary`（原样交付 `byte[]`）。
 - **Modbus RTU**：无真实硬件验证（仅协议层与串口配置校验）。
 - **指标**：宿主提供 `MeterRegistry`（例如引入 `spring-boot-starter-actuator`）时
   自动装配 **Micrometer 指标桥**（读写计数按结果分维度、读写耗时计时器、订阅点位数、

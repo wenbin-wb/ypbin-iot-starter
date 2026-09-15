@@ -1638,6 +1638,27 @@ quarantine, new TestCertificateGroup(...)))` 提供 —— **stack-core 没有�
 `SEC-15`（CA 叶子单独放 → 精确失败）与 `SEC-16`（CA 作锚接受其签发的任何证书）已反向验证：
 去掉诊断即 1 项失败。
 
+**MQTT 负载格式：修掉「二进制负载静默损坏」（2026-09-15）**
+
+集成测试首跑发现的真实问题：适配器无条件 `new String(payload, UTF_8)`。
+`new String` 对非 UTF-8 字节**不会报错**，它把非法字节替换成 U+FFFD ——
+于是 CBOR / protobuf / Modbus-over-MQTT 这类二进制负载**在到达宿主前就变形了，
+而链路全程报成功**。这是本仓最接近「生产事故」的一类问题：没有任何测试会因此变红。
+
+新增 `payload-format` 配置（`MqttPayloadFormat`，带 code/desc）：
+
+| 取值 | 行为 |
+|---|---|
+| `text`（默认） | UTF-8 解码为 `String`；**非法 UTF-8 产出 BAD 值**（原因 `iot.mqtt.payload.not-utf8`），不再静默损坏 |
+| `number` | 解析为 `Double`；非数值 / 非 UTF-8 产出 BAD |
+| `binary` | **原样交付 `byte[]`**，不做任何解码，逐字节保真 |
+
+默认仍是 `text`（保持向后兼容），但**不再有静默损坏这条路径**：
+要么拿到正确的字符串，要么拿到带明确原因的 BAD 值。
+
+`MqttPayloadFormatTest` 5 项覆盖三种格式 + 非法 UTF-8 拒绝 + 枚举 code/desc；
+**已反向验证**：去掉 UTF-8 合法性校验 → MPF-02 失败。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |

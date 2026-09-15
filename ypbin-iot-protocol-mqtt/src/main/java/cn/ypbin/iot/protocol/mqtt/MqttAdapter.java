@@ -107,6 +107,12 @@ public final class MqttAdapter implements ProtocolAdapter {
     /** 链路不可用的消息键。 */
     public static final String MSG_CONNECTION_INACTIVE = "iot.mqtt.connection.inactive";
 
+    /** 负载不是合法 UTF-8 的消息键。 */
+    public static final String MSG_PAYLOAD_NOT_UTF8 = "iot.mqtt.payload.not-utf8";
+
+    /** 负载无法解析为数值的消息键。 */
+    public static final String MSG_PAYLOAD_NOT_NUMBER = "iot.mqtt.payload.not-number";
+
     /** 承载方式不支持的消息键。 */
     public static final String MSG_TRANSPORT_UNSUPPORTED = "iot.mqtt.transport.unsupported";
 
@@ -130,7 +136,7 @@ public final class MqttAdapter implements ProtocolAdapter {
      * @param properties MQTT 配置
      */
     public MqttAdapter(MqttProperties properties) {
-        this.properties = properties == null ? new MqttProperties(null, null, null, null, null)
+        this.properties = properties == null ? new MqttProperties(null, null, null, null, null, null)
                 : properties;
     }
 
@@ -219,7 +225,7 @@ public final class MqttAdapter implements ProtocolAdapter {
                     MSG_TRANSPORT_UNSUPPORTED, connection.getClass().getName()));
         }
         MqttSession session = new MqttSession(device, mqttConnection, context,
-                properties.qosDefault(), properties.isRetainedDefault());
+                properties.qosDefault(), properties.isRetainedDefault(), properties.payloadFormat());
         mqttConnection.register(session);
         return CompletableFuture.completedFuture(session);
     }

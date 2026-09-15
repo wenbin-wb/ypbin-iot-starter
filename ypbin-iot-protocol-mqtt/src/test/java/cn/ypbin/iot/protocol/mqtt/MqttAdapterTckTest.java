@@ -68,7 +68,7 @@ class MqttAdapterTckTest extends AbstractProtocolAdapterTckTest {
         } catch (IOException ex) {
             throw new IllegalStateException("failed to start embedded mqtt broker", ex);
         }
-        adapter = new MqttAdapter(new MqttProperties(null, null, null, 1, null));
+        adapter = new MqttAdapter(new MqttProperties(null, null, null, 1, null, null));
     }
 
     @Override

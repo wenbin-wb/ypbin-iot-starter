@@ -15,6 +15,7 @@
  */
 package cn.ypbin.iot.protocol.mqtt.autoconfigure;
 
+import cn.ypbin.iot.protocol.mqtt.MqttPayloadFormat;
 import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -38,7 +39,20 @@ public record MqttProperties(
         @Nullable String clientIdPrefix,
         @Nullable Boolean cleanSession,
         @Nullable Integer qosDefault,
-        @Nullable Boolean retainedDefault) {
+        @Nullable Boolean retainedDefault,
+        @Nullable MqttPayloadFormat payloadFormat) {
+
+    /**
+     * 归一化后的负载格式。
+     *
+     * <p>组件标 {@code @Nullable} 是构造参数允许为空；访问器给出<b>非空契约</b>。</p>
+     *
+     * @return 负载格式（恒非空，默认 {@link MqttPayloadFormat#TEXT}）
+     */
+    @Override
+    public MqttPayloadFormat payloadFormat() {
+        return payloadFormat == null ? MqttPayloadFormat.TEXT : payloadFormat;
+    }
 
     /**
      * 默认 QoS 的读取入口。
