@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright (c) 2024-present ypbin-iot-starter authors.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cn.ypbin</groupId>
+        <artifactId>ypbin-iot-dependencies</artifactId>
+        <version>${revision}</version>
+        <relativePath>../ypbin-iot-dependencies/pom.xml</relativePath>
+    </parent>
+
+    <artifactId>ypbin-iot-integration-tests</artifactId>
+    <name>ypbin-iot-integration-tests</name>
+    <description>集成测试：完整 Spring Boot 上下文 + 真实协议服务端/中间件的端到端场景</description>
+
+    <properties>
+        <!-- 不发布：集成测试只在构建期跑，没有任何运行期价值。
+             与根 pom 的 dev-only profile 配合，避免未签名产物混进上传包。 -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
+    <dependencies>
+        <!-- 被测对象：完整装配层（含 Micrometer 桥） -->
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-protocol-tcp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-protocol-modbus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-protocol-mqtt</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-protocol-opcua</artifactId>
+        </dependency>
+
+        <!-- 测试基座与工具 -->
+        <dependency>
+            <groupId>cn.ypbin</groupId>
+            <artifactId>ypbin-iot-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 嵌入式 MQTT broker：让 IT 不依赖外部中间件即可跑（外部实例优先的子集） -->
+        <dependency>
+            <groupId>io.moquette</groupId>
+            <artifactId>moquette-broker</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

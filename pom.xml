@@ -141,6 +141,7 @@
             </activation>
             <modules>
                 <module>ypbin-iot-architecture-tests</module>
+                <module>ypbin-iot-integration-tests</module>
             </modules>
         </profile>
 
@@ -192,11 +193,27 @@
             </build>
         </profile>
 
+        <!--
+          集成测试 profile（复用父 pom 的 it profile 定义：它只加了 failsafe）。
+
+          必须在这里补 <modules>：显式激活任一 profile 都会让 activeByDefault 的
+          dev-only 失效，不补的话 `-Pit verify` 的反应堆里**没有集成测试模块** ——
+          命令会"成功"但一个 IT 都没跑（这正是「门禁空转」的经典形态）。
+        -->
+        <profile>
+            <id>it</id>
+            <modules>
+                <module>ypbin-iot-architecture-tests</module>
+                <module>ypbin-iot-integration-tests</module>
+            </modules>
+        </profile>
+
         <!-- 供应链合规：生成 CycloneDX SBOM。显式带回架构测试模块，保证 SBOM 覆盖完整。 -->
         <profile>
             <id>sbom</id>
             <modules>
                 <module>ypbin-iot-architecture-tests</module>
+                <module>ypbin-iot-integration-tests</module>
             </modules>
             <build>
                 <plugins>

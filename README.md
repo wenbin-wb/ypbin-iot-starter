@@ -245,8 +245,14 @@ tools/preflight.sh             # 发布前总检（按正确顺序把上述门�
 > **CI 已实测通过**（首次运行）：8 个步骤全部真实执行 —— 全量构建与单测 124s、
 > NullAway 26s、依赖收敛 4s、元数据漂移校验、SBOM 生成 26s（耗时即「确实跑了」的证据）。
 >
-> **`-Pit` 目前是空转**：本仓还没有任何 `*IT.java`，`mvn -Pit verify` 不会执行任何集成测试。
-> 协议侧的端到端验证目前都在各协议模块的单测里（自带本地模拟器/broker/服务端）。
+```bash
+mvn -Pit -Dsurefire.skip=true verify   # 集成测试（*IT.java，完整 Spring Boot 上下文 + 嵌入式 broker）
+```
+
+> **集成测试**在 `ypbin-iot-integration-tests`（不发布，由 `it` / `dev-only` profile 承载）：
+> 用完整 Spring Boot 上下文跑端到端场景（自动装配 → 生命周期绑定 → 建链 → 订阅 →
+> 中间件推送 → 出口），宿主只提供 `DeviceRegistry` / `ConnectionSpecProvider` / `DataSink` 三样 SPI。
+> **注意必须带 `-Pit`**：不带的话这些 `*IT.java` 根本不会被执行（surefire 默认不匹配 `*IT.java`）。
 >
 > **子模块测试 vs 全量**：`-pl X test`（不带 `-am`）会用 `~/.m2` 里的**旧制品**跑测试，
 > 可能产出与全量构建不同的失败 —— 判定「是否回归」一律以 `mvn clean test` 或带 `-am` 的命令为准。

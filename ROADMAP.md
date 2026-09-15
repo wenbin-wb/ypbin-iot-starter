@@ -22,7 +22,7 @@
 
 - ✅ 非发布模块隔离（`dev-only` profile）+ `ModulePublishingTest` 门禁
 - ✅ `LICENSE` / `CHANGELOG` / `CONTRACT` / `CONTRIBUTING` / `RELEASING` / `ROADMAP`
-- ✅ CI（`ci.yml` / `codeql.yml` / `release.yml`，对齐母仓）
+- ✅ CI（`ci.yml` / `codeql.yml` / `release.yml`，对齐母仓）+ 独立的**集成测试作业**（`-Pit`）
 - ✅ NullAway（`-Pnullaway` + `@NullMarked`）覆盖全部 8 个模块（0 违规，含执行自检）
   - ✅ 父版本钉 **`3.1.0`（已发布正式版）**：拿到 `nullaway` / `dep-convergence` 两个 profile，
     同时干净环境可直接构建（2.2.3 没有这些 profile）
@@ -63,9 +63,10 @@
 
 ## 已知技术债（⬜）
 
-- ⬜ **`-Pit` 是空转**：本仓没有任何 `*IT.java`，`mvn -Pit verify` 不执行任何集成测试。
-  协议侧端到端验证暂时都在各协议模块单测里（自带模拟器/broker/服务端）；
-  若要真正用起 IT 体系，需要把「跨模块 + 真实中间件」的场景拆出去。
+- 🚧 **集成测试体系**：`ypbin-iot-integration-tests` 已落地（完整 Spring Boot 上下文 + 嵌入式 broker），
+  走 `-Pit` + failsafe；已覆盖 MQTT 全链路与指标装配，待补多协议并存、重连后数据面恢复等场景
+- ⬜ **MQTT 二进制负载会被静默损坏**（由 IT 首跑发现）：适配器无条件按 UTF-8 解码，
+  非 UTF-8 负载会变成 U+FFFD 且链路仍报成功。建议加 `payload-format: text|number|binary`
 - ⬜ OPC UA：信任目录放「CA 签发的叶子」不可用（Milo 只把自签证书当信任锚）；
   `HOSTNAME` 已做成可选开关、`APPLICATION_URI` 保留，但两者的比对值取自服务端自述，
   **对主动 MITM 无防护**，真正的门闩只有信任列表。

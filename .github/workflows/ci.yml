@@ -55,3 +55,32 @@ jobs:
           name: jacoco-reports
           path: '**/target/site/jacoco/'
           if-no-files-found: warn
+
+  # 集成测试独立作业：与 build 作业用**同一个 -Pit** 跑，避免与单元测试重复。
+  # -Dsurefire.skip=true 只跳过 surefire（单元测试），failsafe(*IT.java) 照跑。
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 配置 JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # -Pit 会让 activeByDefault 的 dev-only 失效，因此根 pom 的 it profile 里显式带回了
+      # architecture-tests 与 integration-tests 两个模块 —— 否则反应堆里没有 IT 模块，
+      # 命令会"成功"但一个 IT 都没跑（门禁空转）。
+      - name: 集成测试（*IT.java，嵌入式 broker/服务端）
+        run: mvn -B -ntp -Pit -Dsurefire.skip=true verify
+
+      - name: 归档 Failsafe 报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failsafe-reports
+          path: '**/target/failsafe-reports/'
+          if-no-files-found: warn

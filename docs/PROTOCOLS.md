@@ -1583,6 +1583,28 @@ quarantine, new TestCertificateGroup(...)))` 提供 —— **stack-core 没有�
 > 这是同一族问题的又一次出现：**门禁是绿的 ≠ 它检查了你以为的范围**。
 > 与「放进 `pluginManagement` 导致门禁永不生效」「`-am` 失败后跳过后续模块导致假零」同源。
 
+**集成测试体系落地（2026-09-15）——并抓到一个真实的静默风险**
+
+新增不发布的 `ypbin-iot-integration-tests` 模块（进 `dev-only` / `it` profile），
+用**完整 Spring Boot 上下文**跑端到端场景：宿主只提供三样 SPI（`DeviceRegistry`、
+`ConnectionSpecProvider`、`DataSink`）加一个 `MeterRegistry`，其余全部走框架自动装配 ——
+覆盖「自动装配 → `ApplicationReadyEvent` 自动绑定 → 建链 → 订阅 → broker 推送 →
+适配器回调 → 宿主转发 → `EgressRouter` → 批量合并 → `DataSink`」。
+
+> `-Pit` 必须显式带上 `dev-only` 里的模块：显式激活任一 profile 都会让 `activeByDefault`
+> 的 dev-only 失效，不补 `<modules>` 的话 `mvn -Pit verify` 的**反应堆里根本没有 IT 模块** ——
+> 命令会「成功」但一个 IT 都没跑。这是「门禁空转」的又一形态，已在根 pom 的 `it` profile 里补上。
+
+**IT 首跑就抓到一个真实问题（这正是集成测试的价值）**：
+
+| 现象 | 根因 | 影响 |
+|---|---|---|
+| broker 推 `"23.5"`，宿主收到的 `PointValue.value()` 是 **String** 而非 Double | MQTT 适配器无条件 `new String(payload, UTF_8)`（`MqttSession` 第 346 行），没有任何负载格式配置 | 文本/JSON 负载没问题；但**二进制负载（CBOR/protobuf/Modbus-over-MQTT）会被静默损坏** —— UTF-8 解码把非 UTF-8 字节替换成 U+FFFD，数据在到达宿主前就已经变形，而链路全程「成功」 |
+
+**处置**：当前行为已由 `IT-MQTT-01` 钉住（避免无意变更），风险登记在 `ROADMAP.md`，
+建议的修法是加 `payload-format: text|number|binary`（默认 `text` 保持兼容，
+`binary` 时直接把 `byte[]` 交给宿主，不再解码）。
+
 **M1 已落地协议模块（2026-09-13）**
 
 | 模块 | 协议库 | 能力 | 测试 | 覆盖率 |
