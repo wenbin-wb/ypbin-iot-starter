@@ -33,6 +33,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
@@ -226,6 +228,52 @@ class EgressRouterTest {
                     .containsExactlyElementsOf(expected);
         } finally {
             router.close();
+        }
+    }
+
+    @Test
+    @DisplayName("EGRESS-11 高并发投放不得丢批次（并把 CAS 重试分支变成确定性覆盖）")
+    void concurrentEmitMustNotLoseBatches() throws Exception {
+        // 这条用例除了验证正确性，还有一个工程目的：**消除覆盖率噪声**。
+        // emit() 里的 `queuedPoints.compareAndSet` 只在**竞争失败重试**时才走另一条分支，
+        // 单线程用例几乎不会命中、并发用例命中与否取决于时序 —— 于是 runtime 模块的分支覆盖
+        // 在多次运行间摆动（实测 264~268/388）。这里用足够多线程把该分支逼成**必然执行**。
+        final int threads = 8;
+        final int perThread = 200;
+        RecordingSink sink = new RecordingSink("sink");
+        EgressRouter router = new EgressRouter(64, 1_000_000, EgressOverflowPolicy.DROP_OLDEST,
+                Duration.ofMillis(50), Duration.ofMillis(20), List.of(sink), List.of(),
+                Clock.systemUTC());
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            for (int worker = 0; worker < threads; worker++) {
+                final int id = worker;
+                pool.submit(() -> {
+                    awaitQuietly(start);
+                    for (int index = 0; index < perThread; index++) {
+                        router.emit(batch("d" + id, 1));
+                    }
+                });
+            }
+            start.countDown();
+            pool.shutdown();
+            assertThat(pool.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
+
+            awaitPoints(sink, threads * perThread);
+            assertThat(sink.received)
+                    .as("并发投放不得丢点；也不得因竞争重复计入")
+                    .hasSize(threads * perThread);
+        } finally {
+            router.close();
+        }
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
         }
     }
 
