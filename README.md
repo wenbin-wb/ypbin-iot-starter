@@ -1,13 +1,34 @@
 # ypbin-iot-starter
 
-<!-- 仓库当前是**私有**的：徽章只对已登录且有权限的用户可见，匿名访问会显示为破图；
-     仓库转公开后无需改动本段，徽章自动生效。
-     CodeQL 徽章暂不展示：私有仓库的 code scanning 需要 GitHub Advanced Security，
-     该工作流目前只支持手动触发（见 .github/workflows/codeql.yml 顶部说明）。 -->
 [![CI](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml/badge.svg)](https://github.com/wenbin-wb/ypbin-iot-starter/actions/workflows/codeql.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
 
 > 多协议物联网接入框架 Spring Boot Starter —— **JDK 21 · Spring Boot 4.1 · Netty 4.1**
 > 目标：单机 10 万连接，集群千万级。
+---
+
+> ## ⚠️ 开发阶段说明（请先读这一段）
+>
+> 本项目的状态是 **早期开发（alpha）**，请按「可以读、可以试、但**不要直接上生产**」来看待它。
+>
+> | 维度 | 现状 |
+> |---|---|
+> | 版本 | **未发布任何正式版**（开发版 `0.1.0-SNAPSHOT`），Maven Central 上无此坐标 |
+> | API 稳定性 | **不保证**。`1.0.0` 之前的公开接口可能随时变更，见 [`CONTRACT.md`](./CONTRACT.md) |
+> | 真实环境验证 | **尚未在真实项目中接入验证过** —— 现有证据全部来自本仓自带的模拟器/broker/服务端 |
+> | 协议覆盖 | TCP 透传 / Modbus(TCP+RTU) / MQTT 3.1.1 / OPC UA 四个；RTU 无真实硬件验证 |
+> | 工程质量 | CI 的门禁是**真的在跑**（构建 342+ 用例、架构约束、NullAway、覆盖率、依赖收敛、元数据漂移），详见下方「工程治理与质量门禁」 |
+>
+> **这意味着什么**：如果你要拿它做真实项目，请把它当作一个**需要自己补齐验证**的起点 ——
+> 先用 `probe()` 打通目标设备、按 `CONTRACT.md` 核对行为承诺、并在自己的环境里补一轮端到端测试。
+> 欢迎反馈问题，尤其是「现场设备连不上 / 行为与文档不符」这类真实性缺口。
+>
+> **已知限制**（详见 [`ROADMAP.md`](./ROADMAP.md) 与 [`docs/PROTOCOLS.md`](./docs/PROTOCOLS.md)）：
+> 指标桥需要宿主提供 `MeterRegistry`；OPC UA 信任目录放「CA 签发的叶子证书」不可用；
+> `HOSTNAME`/`APPLICATION_URI` 校验对主动 MITM 无防护；`-Pit` 集成测试目前是空转。
+
+
 
 > **当前状态：M1 主体已完成（2026-09-14）**。**尚未发布任何版本**（`0.1.0-SNAPSHOT`）——
 > 尚未在真实项目中验证过，因此刻意不发布。

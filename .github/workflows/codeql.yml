@@ -1,26 +1,19 @@
 name: CodeQL
 
-# ⚠️ 目前**只支持手动触发**。
+# 触发方式：push / PR / 每周一次。
 #
-# 原因：GitHub 的 code scanning（CodeQL 结果上传）对**公开仓库免费**，
-# 对**私有仓库需要 GitHub Advanced Security**（付费）。本仓当前是私有的，
-# 每次 push 都会以「Code scanning is not enabled for this repository」失败 ——
-# 一个永远红的检查只会训练人忽略红灯，所以这里不挂在 push/PR 上。
-#
-# 恢复方式（二选一）：
-#   ① 仓库转公开 → 取消下面的注释，恢复 push/pull_request/schedule 触发；
-#   ② 开通 GitHub Advanced Security → 同样取消注释。
-#
-# 注：本地/CI 的静态质量已由其他门禁覆盖（ArchUnit 架构约束、源码规范扫描、
-# NullAway 空值语义、JaCoCo 覆盖率、spotless），CodeQL 是补充而非唯一防线。
+# 注：GitHub 的 code scanning 对**公开仓库免费**、对私有仓库需要 GitHub Advanced Security。
+# 本仓是公开仓库，所以下面三种触发都能用。若将来转为私有且未开通 GHAS，
+# 需要把这些触发注释掉、改为仅 workflow_dispatch —— 否则每次 push 都会以
+# 「Code scanning is not enabled for this repository」失败（一个永远红的检查只会训练人忽略红灯）。
 on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  schedule:
+    - cron: '0 3 * * 1'
   workflow_dispatch:
-  # push:
-  #   branches: [master, main]
-  # pull_request:
-  #   branches: [master, main]
-  # schedule:
-  #   - cron: '0 3 * * 1'
 
 permissions:
   contents: read
