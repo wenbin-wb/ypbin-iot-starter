@@ -290,6 +290,109 @@ class OpcUaSecurityTest {
                 .isInstanceOf(Exception.class);
     }
 
+    @Test
+    @DisplayName("SEC-15 信任目录只有 CA 签发的叶子时必须显式失败（它当不了信任锚）")
+    void caIssuedLeafAloneMustFailFast() throws Exception {
+        // Milo 的信任锚**只能由自签证书构成**（CertificateValidationUtil.buildTrustedCertPath），
+        // 因此把一张 CA 签发的叶子单独放进信任目录是**永远用不上**的配置 ——
+        // 以前它会以一句「trustAnchors must be non-empty」失败，宿主根本猜不到原因。
+        Path caKeyStore = generateCaKeyStore();
+        Path leafKeyStore = generateCaIssuedLeafKeyStore(caKeyStore);
+        Path trustDir = tempDir.resolve("trusted-leaf-only");
+        Files.createDirectories(trustDir);
+        exportCertificate(leafKeyStore, "leaf", trustDir.resolve("leaf.pem"));
+
+        AdapterContext ctx = context(ref -> Optional.of(new CredentialResolver.Credential("u",
+                STORE_PASSWORD.toCharArray(), Map.of())));
+        assertThatThrownBy(() -> OpcUaSecurity.prepare(
+                secured(leafKeyStore.toString(), trustDir.toString(), null, null, null), ctx, "c1"))
+                .as("必须在装配期就说清「这张证书当不了锚、请改放 CA 或自签证书」")
+                .isInstanceOf(ConnectionException.class)
+                .hasMessageContaining("cannot act as a trust anchor");
+    }
+
+    @Test
+    @DisplayName("SEC-16 信任目录放 CA 时可用，但它会接受该 CA 签发的**任何**证书（不是精确 pin）")
+    void caAnchorTrustsEveryCertItIssued() throws Exception {
+        // 这条用例把「CA 作锚」的真实语义钉住：它**不是**精确 pin。
+        // 反直觉之处在于：即使把「CA + 指定叶子」都放进信任目录，结论也一样 ——
+        // 锚是那个 CA，而锚本身就在信任列表里，最终那道「路径须含信任证书」的校验恒真。
+        // 想精确 pin 只有一种形式：放**自签的终端实体证书**。
+        Path caKeyStore = generateCaKeyStore();
+        Path leafKeyStore = generateCaIssuedLeafKeyStore(caKeyStore);
+        Path otherKeyStore = generateCaIssuedLeafKeyStore(caKeyStore, "other-leaf", "other");
+        Path trustDir = Files.createDirectories(tempDir.resolve("trusted-ca"));
+        exportCertificate(caKeyStore, "ca", trustDir.resolve("ca.pem"));
+
+        AdapterContext ctx = context(ref -> Optional.of(new CredentialResolver.Credential("u",
+                STORE_PASSWORD.toCharArray(), Map.of())));
+        OpcUaSecurity.Material material = OpcUaSecurity.prepare(
+                secured(leafKeyStore.toString(), trustDir.toString(), null, null, null), ctx, "c1");
+
+        // 该 CA 签发的叶子必须通过（证明 CA 配置可用）
+        assertThatCode(() -> material.certificateValidator().validateCertificateChain(
+                List.of(readCertificate(leafKeyStore, "leaf")), "urn:ypbin:iot:test-server",
+                new String[] {"127.0.0.1"})).doesNotThrowAnyException();
+
+        // 同一 CA 签发的**另一张**叶子也会通过 —— 这就是「CA 作锚 = 信任该 CA 的一切」的证据
+        assertThatCode(() -> material.certificateValidator().validateCertificateChain(
+                List.of(readCertificate(otherKeyStore, "other-leaf")), "urn:ypbin:iot:test-server",
+                new String[] {"127.0.0.1"}))
+                .as("CA 作锚会接受该 CA 签发的任何证书；想精确 pin 必须用自签终端实体证书")
+                .doesNotThrowAnyException();
+    }
+
+    /** 生成自签 CA（basicConstraints CA:true）。 */
+    private Path generateCaKeyStore() throws Exception {
+        Path keyStore = tempDir.resolve("ca.p12");
+        runKeytool("-genkeypair", "-alias", "ca", "-keyalg", "RSA", "-keysize", "2048",
+                "-validity", "365", "-dname", "CN=ypbin-test-ca", "-keystore", keyStore.toString(),
+                "-storetype", "PKCS12", "-storepass", STORE_PASSWORD, "-keypass", STORE_PASSWORD,
+                "-ext", "bc:critical=ca:true,pathlen:0",
+                "-ext", "ku=digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment,keyCertSign,cRLSign");
+        return keyStore;
+    }
+
+    /** 生成由给定 CA 签发的叶子证书 keystore（别名默认 {@code leaf}）。 */
+    private Path generateCaIssuedLeafKeyStore(Path caKeyStore) throws Exception {
+        return generateCaIssuedLeafKeyStore(caKeyStore, "leaf", "ypbin-test");
+    }
+
+    private Path generateCaIssuedLeafKeyStore(Path caKeyStore, String alias, String commonName)
+            throws Exception {
+        Path leafKeyStore = tempDir.resolve(alias + ".p12");
+        runKeytool("-genkeypair", "-alias", alias, "-keyalg", "RSA", "-keysize", "2048",
+                "-validity", "365", "-dname", "CN=" + commonName, "-keystore", leafKeyStore.toString(),
+                "-storetype", "PKCS12", "-storepass", STORE_PASSWORD, "-keypass", STORE_PASSWORD,
+                "-ext", "ku=digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment",
+                "-ext", "eku=clientAuth,serverAuth",
+                "-ext", "san=ip:127.0.0.1,uri:urn:ypbin:iot:test-server");
+        Path csr = tempDir.resolve(alias + ".csr");
+        runKeytool("-certreq", "-alias", alias, "-keystore", leafKeyStore.toString(),
+                "-storepass", STORE_PASSWORD, "-file", csr.toString());
+        Path signed = tempDir.resolve(alias + ".cer");
+        runKeytool("-gencert", "-alias", "ca", "-keystore", caKeyStore.toString(),
+                "-storepass", STORE_PASSWORD, "-infile", csr.toString(), "-outfile", signed.toString(),
+                "-validity", "365",
+                "-ext", "ku=digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment",
+                "-ext", "eku=clientAuth,serverAuth",
+                "-ext", "san=ip:127.0.0.1,uri:urn:ypbin:iot:test-server");
+        // 把 CA 与签名后的叶子证书都导入，替换掉原先的自签叶子
+        Path caCer = tempDir.resolve("ca.cer");
+        exportCertificate(caKeyStore, "ca", caCer);
+        runKeytool("-importcert", "-noprompt", "-alias", "ca", "-file", caCer.toString(),
+                "-keystore", leafKeyStore.toString(), "-storepass", STORE_PASSWORD);
+        runKeytool("-importcert", "-noprompt", "-alias", alias, "-file", signed.toString(),
+                "-keystore", leafKeyStore.toString(), "-storepass", STORE_PASSWORD);
+        return leafKeyStore;
+    }
+
+    /** 从 keystore 导出某别名的证书（PEM）。 */
+    private void exportCertificate(Path keyStore, String alias, Path target) throws Exception {
+        runKeytool("-exportcert", "-alias", alias, "-keystore", keyStore.toString(),
+                "-storepass", STORE_PASSWORD, "-rfc", "-file", target.toString());
+    }
+
     /**
      * 用给定的扩展参数签发一张自签证书（别名固定 {@code client}）、放进信任目录，断言校验器**拒绝**它。
      *
@@ -319,6 +422,15 @@ class OpcUaSecurityTest {
                 List.of(certificate), "urn:ypbin:iot:test-server", new String[] {"127.0.0.1"}))
                 .as("不合规的证书必须被拒；若通过说明对应的检查项没生效（变异测试可复现）")
                 .isInstanceOf(Exception.class);
+    }
+
+    private X509Certificate readCertificate(Path keyStore, String alias) throws Exception {
+        char[] password = STORE_PASSWORD.toCharArray();
+        try (InputStream input = Files.newInputStream(keyStore)) {
+            KeyStore store = KeyStore.getInstance("PKCS12");
+            store.load(input, password);
+            return (X509Certificate) store.getCertificate(alias);
+        }
     }
 
     private X509Certificate readCertificate(Path keyStore) throws Exception {

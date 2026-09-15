@@ -300,7 +300,70 @@ final class OpcUaSecurity {
             throw new ConnectionException(connectionId, OpcUaAdapter.MSG_TRUST_NOT_CONFIGURED,
                     "no usable certificate found in " + directory);
         }
+        diagnoseTrustAnchors(certificates, directory, connectionId);
         return certificates;
+    }
+
+    /**
+     * 诊断信任目录里各证书**能不能当信任锚**，并在配置不可能按预期工作时显式失败。
+     *
+     * <p>依据 Milo 源码（{@code CertificateValidationUtil.buildTrustedCertPath}）：
+     * <b>信任锚只能由自签证书构成</b>；CA 作为中间证书参与路径构建；
+     * 路径构建完成后还会校验「路径（含锚）中至少有一个证书在信任列表里」。</p>
+     *
+     * <p><b>这里有一个反直觉且与安全相关的推论，必须让宿主知道</b>：
+     * 「信任目录同时放 CA 与指定叶子」<b>并不能</b>得到精确 pin ——
+     * 因为锚是那个 CA，而锚本身就在信任列表里，那道最终校验恒真，
+     * 于是<b>该 CA 签发的任何证书都会被接受</b>。精确 pin 只有一种形式：
+     * <b>自签的终端实体证书</b>（此时锚就是它自己）。</p>
+     *
+     * @param certificates 信任目录里读到的证书
+     * @param directory    信任目录（用于错误信息）
+     * @param connectionId 链路标识
+     */
+    private static void diagnoseTrustAnchors(List<X509Certificate> certificates, String directory,
+            String connectionId) {
+        boolean hasAnchor = false;
+        for (X509Certificate certificate : certificates) {
+            boolean selfSigned = isSelfSigned(certificate);
+            boolean ca = certificate.getBasicConstraints() >= 0;
+            if (selfSigned) {
+                hasAnchor = true;
+                if (ca) {
+                    log.warn("[ypbin-iot] trust dir {}: {} is a self-signed CA. As a trust anchor it accepts "
+                            + "EVERY certificate that CA has issued (not an exact pin). "
+                            + "To pin exactly one server, put that server's SELF-SIGNED certificate instead.",
+                            directory, certificate.getSubjectX500Principal().getName());
+                }
+            } else if (!ca) {
+                // 非自签、非 CA 的终端实体证书：既不能做锚，也不能做中间证书 → 这份配置永远用不上它
+                throw new ConnectionException(connectionId, OpcUaAdapter.MSG_TRUST_NOT_CONFIGURED,
+                        directory + " contains a CA-issued end-entity certificate '"
+                                + certificate.getSubjectX500Principal().getName()
+                                + "' which cannot act as a trust anchor (only self-signed certificates can). "
+                                + "Put the issuing CA in the trust dir instead (note: that trusts every "
+                                + "certificate the CA issued), or use the server's self-signed certificate.");
+            }
+        }
+        if (!hasAnchor) {
+            throw new ConnectionException(connectionId, OpcUaAdapter.MSG_TRUST_NOT_CONFIGURED,
+                    directory + " contains no self-signed certificate, so no trust anchor can be built; "
+                            + "every server certificate would fail validation.");
+        }
+    }
+
+    /** 证书是否自签（subject == issuer 且用自身公钥验签通过）。 */
+    private static boolean isSelfSigned(X509Certificate certificate) {
+        if (!certificate.getSubjectX500Principal().equals(certificate.getIssuerX500Principal())) {
+            return false;
+        }
+        try {
+            certificate.verify(certificate.getPublicKey());
+            return true;
+        } catch (Exception ex) {
+            // 验签失败即不是自签：这是判断结论而非异常，故不向上抛
+            return false;
+        }
     }
 
     private static String resolvePassword(@Nullable String ref, String what,

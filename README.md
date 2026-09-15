@@ -25,7 +25,7 @@
 > 欢迎反馈问题，尤其是「现场设备连不上 / 行为与文档不符」这类真实性缺口。
 >
 > **已知限制**（详见 [`ROADMAP.md`](./ROADMAP.md) 与 [`docs/PROTOCOLS.md`](./docs/PROTOCOLS.md)）：
-> 指标桥需要宿主提供 `MeterRegistry`；OPC UA 信任目录放「CA 签发的叶子证书」不可用；
+> 指标桥需要宿主提供 `MeterRegistry`；OPC UA 信任目录只能放「自签证书」（精确 pin）或「自签 CA」（信任该 CA 签发的一切）——CA 签发的叶子当不了信任锚；
 > `HOSTNAME`/`APPLICATION_URI` 校验对主动 MITM 无防护；`-Pit` 集成测试目前是空转。
 
 
