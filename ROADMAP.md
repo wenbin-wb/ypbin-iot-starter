@@ -42,7 +42,10 @@
 
 - ✅ OPC UA 用户名令牌端到端验证（`SEC-E2E-02` 通过令牌认证读到数据；`SEC-E2E-03` 证明错误口令被拒）
 - ⬜ Modbus RTU 真实硬件验证
-- ⬜ 指标桥（Micrometer）——当前默认无操作实现，**指标会被丢弃**
+- ✅ Micrometer 指标桥（`IotMicrometerAutoConfiguration` + `MicrometerMetricsRecorder`）：
+  有 `MeterRegistry` 时自动生效（7 个仪表：读写计数×2 维度、读写计时器、订阅点位数、错误数、gauge），
+  无则回退无操作；实现严格遵守「非阻塞」契约（无 IO、无日志、无锁等待），
+  且不擅自开启分位数/直方图
 - ⬜ GB/T 26875（消防）双版本
 - ⬜ 剩余候选协议（见 `docs/PROTOCOLS.md` 的选型清单）
 

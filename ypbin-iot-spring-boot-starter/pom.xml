@@ -48,6 +48,13 @@
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
         </dependency>
+        <!-- Micrometer 指标桥所需的 API。optional：不强制宿主引入；
+             宿主接入 actuator（或自带 micrometer）时自动生效，见 IotMetricsAutoConfiguration。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <properties>

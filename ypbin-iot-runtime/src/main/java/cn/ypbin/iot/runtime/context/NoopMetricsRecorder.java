@@ -22,8 +22,10 @@ import java.time.Duration;
  * 无操作指标实现：非 Spring 环境或未接入指标后端时使用。
  *
  * <p>不做任何记录的<b>同时也不吞掉语义</b>：指标本身是可选的横切能力，
- * 不记录不等于静默降级。但要注意：<b>starter 目前装配的就是本实现</b>（Micrometer 桥尚未实现），
- * 因此在未自行提供 {@code MetricsRecorder} 的应用里，指标是被丢弃的 —— 装配期会打 INFO 提示。</p>
+ * 不记录不等于静默降级。本实现是<b>回退</b>：宿主提供了 {@code MeterRegistry} 时，
+ * starter 会装配 Micrometer 实现（{@code IotMicrometerAutoConfiguration}）；
+ * 只有在没有 {@code MeterRegistry}（且宿主也未自行提供）时才落到这里，
+ * 此时指标确实被丢弃 —— 装配期会打 INFO 说明原因与解法。</p>
  *
  * @author wenbin
  * @since 2026-09-13

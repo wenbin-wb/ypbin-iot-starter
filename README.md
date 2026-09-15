@@ -123,7 +123,7 @@ ypbin:
 | `ypbin-iot-core` | SPI 契约、值对象、异常体系 | ❌ 零依赖 | ❌ 零依赖 |
 | `ypbin-iot-transport` | Netty 传输底座：TCP/UDP/串口/WebSocket 连接工厂与编解码基座 | ❌ | ✅ |
 | `ypbin-iot-runtime` | 适配器注册、连接复用、会话管理、时间轮调度、微批出口 | ❌ | ❌ |
-| `ypbin-iot-spring-boot-starter` | 条件装配、`ypbin.iot.*` 配置、Actuator；指标默认无操作（Micrometer 桥**尚未提供**，需宿主自行提供 `MetricsRecorder`）| ✅ | 传递引入 |
+| `ypbin-iot-spring-boot-starter` | 条件装配、`ypbin.iot.*` 配置、Actuator、**Micrometer 指标桥**（宿主有 `MeterRegistry` 时自动生效，否则回退无操作并打 INFO）| ✅ | 传递引入 |
 
 ### 协议模块（按需引入）
 

@@ -771,7 +771,8 @@ public interface ResourceRegistry {
 
 ```java
 /**
- * 指标埋点门面。core 零 Spring 依赖（刻意不暴露 Micrometer 类型），默认由 starter 提供无操作实现。
+ * 指标埋点门面。core 零 Spring 依赖（刻意不暴露 Micrometer 类型）。
+ * starter 在宿主提供 {@code MeterRegistry} 时装配 Micrometer 实现，否则回退无操作实现。
  *
  * <p><b>实现约束：本接口的方法会在下列线程上被<b>同步</b>调用，实现必须非阻塞。</b>
  * 实测的调用点落点有四类：</p>

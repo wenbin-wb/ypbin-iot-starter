@@ -34,5 +34,6 @@
   （`HOSTNAME` / `APPLICATION_URI`）的比对值来自服务端自述，**对主动 MITM 无防护**。
 - **MQTT**：基线为 MQTT 3.1.1（MQTT 5 专属配置不支持）；不声明 `READ` 能力。
 - **Modbus RTU**：无真实硬件验证（仅协议层与串口配置校验）。
-- **指标**：默认装配无操作实现，**指标会被丢弃**；Micrometer 桥尚未提供，需宿主自行提供
-  `MetricsRecorder`。
+- **指标**：宿主提供 `MeterRegistry`（例如引入 `spring-boot-starter-actuator`）时
+  自动装配 **Micrometer 指标桥**（读写计数按结果分维度、读写耗时计时器、订阅点位数、
+  按消息键分类的错误数、瞬时值 gauge）；没有 `MeterRegistry` 时回退到无操作实现并打 INFO。

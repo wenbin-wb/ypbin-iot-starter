@@ -121,10 +121,11 @@ public class IotAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public MetricsRecorder iotMetricsRecorder() {
-        // 不能用 debug：指标被丢弃是宿主应当知情的事（Micrometer 桥尚未实现），
-        // 只在 debug 打一行等于静默降级
-        log.info("[ypbin-iot] iotMetricsRecorder uses the no-op implementation; metrics are DISCARDED. "
-                + "Provide your own MetricsRecorder bean (e.g. a Micrometer bridge) to collect them.");
+        // 不能用 debug：指标被丢弃是宿主应当知情的事，只在 debug 打一行等于静默降级。
+        // 走到这里说明**没有** MeterRegistry（否则 IotMicrometerAutoConfiguration 会先生效）。
+        log.info("[ypbin-iot] no MeterRegistry found; iotMetricsRecorder falls back to the no-op "
+                + "implementation and metrics are DISCARDED. Add micrometer (e.g. spring-boot-starter-actuator) "
+                + "or provide your own MetricsRecorder bean to collect them.");
         return NoopMetricsRecorder.INSTANCE;
     }
 
