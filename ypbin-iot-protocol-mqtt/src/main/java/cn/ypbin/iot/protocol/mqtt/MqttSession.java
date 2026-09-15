@@ -191,7 +191,7 @@ final class MqttSession implements DeviceSession {
             stage = connection.client().publishWith()
                     .topic(topic)
                     .qos(qosOf(write))
-                    .retain(retainedOf(write))
+                    .retain(retainedOf())
                     .payload(payload)
                     .send();
         } catch (RuntimeException ex) {
@@ -240,7 +240,15 @@ final class MqttSession implements DeviceSession {
         return MqttQos.fromCode(Math.min(Math.max(qos, 0), MqttAdapter.MAX_QOS));
     }
 
-    private boolean retainedOf(PointWrite write) {
+    /**
+     * retained 标志：设备级属性优先，否则用连接的默认值。
+     *
+     * <p>按设备取而不是按点位取：retained 是「这条链路怎么发」的策略，
+     * 归一到连接/设备维度，避免同一次批量写里出现混合语义。</p>
+     *
+     * @return 是否 retention
+     */
+    private boolean retainedOf() {
         String configured = device.properties().get(MqttAdapter.ATTRIBUTE_RETAINED);
         if (configured != null && !configured.isBlank()) {
             return Boolean.parseBoolean(configured.trim());
@@ -475,10 +483,13 @@ final class MqttSession implements DeviceSession {
     /**
      * 单次订阅。
      *
+     * <p>不持有外部 {@link MqttSession} 实例：句柄只承载订阅自身状态，
+     * 因此声明为 {@code static}（否则每个句柄都会隐式持有会话引用）。</p>
+     *
      * @author wenbin
      * @since 2026-09-13
      */
-    private final class Subscription implements SubscriptionHandle {
+    private static final class Subscription implements SubscriptionHandle {
 
         private final String subscriptionId;
 

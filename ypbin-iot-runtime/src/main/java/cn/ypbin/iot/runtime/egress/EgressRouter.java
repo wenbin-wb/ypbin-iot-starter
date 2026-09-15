@@ -349,7 +349,7 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
                     return false;
                 }
                 // DROP_OLDEST
-                if (!evictOldest(points)) {
+                if (!evictOldest()) {
                     drop(points, "queue full and nothing to evict");
                     return false;
                 }
@@ -377,7 +377,15 @@ public final class EgressRouter implements DataEgress, AutoCloseable {
         return false;
     }
 
-    private boolean evictOldest(int points) {
+    /**
+     * 按 DROP_OLDEST 淘汰一个最老的批次。
+     *
+     * <p>只淘汰一批：腾出的空间由调用方的重试循环继续判定（不够就再来一轮），
+     * 因此不需要知道本次要腾多少点位。</p>
+     *
+     * @return 真的淘汰了一批返回 {@code true}；队列已空返回 {@code false}
+     */
+    private boolean evictOldest() {
         DataBatch evicted = queue.poll();
         if (evicted == null) {
             return false;

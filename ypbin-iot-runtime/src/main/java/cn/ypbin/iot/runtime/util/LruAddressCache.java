@@ -59,7 +59,10 @@ public final class LruAddressCache<A> implements BoundedAddressCache<A> {
 
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, A> eldest) {
-                return size() > LruAddressCache.this.maximumSize;
+                // 显式 this：这里要的是 **map 自身**的大小（继承自 LinkedHashMap），
+                // 而不是外层同名的 LruAddressCache.size()（那个要走锁、语义是整表大小）。
+                // 静态扫描会提示「调用的是父类方法而非外层同名方法」——此处正是有意如此。
+                return this.size() > LruAddressCache.this.maximumSize;
             }
         };
     }

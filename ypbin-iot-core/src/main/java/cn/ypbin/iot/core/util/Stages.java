@@ -58,13 +58,6 @@ public final class Stages {
     }
 
     /**
-     * 构造以原始异常完成为失败的 Future。
-     *
-     * @param throwable 业务异常
-     * @param <T>       结果类型
-     * @return 失败的 Future
-     */
-    /**
      * 从异常中提取消息键，用于把失败原因<b>原样</b>带出去。
      *
      * <p>典型场景是 {@code probe()}：把 TLS 未实现、安全策略不支持这类配置错误
@@ -84,6 +77,13 @@ public final class Stages {
         return fallback;
     }
 
+    /**
+     * 构造以原始异常完成为失败的 Future。
+     *
+     * @param throwable 业务异常
+     * @param <T>       结果类型
+     * @return 失败的 Future
+     */
     public static <T> CompletableFuture<T> failed(Throwable throwable) {
         CompletableFuture<T> future = new CompletableFuture<>();
         future.completeExceptionally(unwrap(throwable));

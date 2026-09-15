@@ -478,10 +478,13 @@ final class OpcUaSession implements DeviceSession {
     /**
      * 单次订阅。
      *
+     * <p>不持有外部 {@link OpcUaSession} 实例：句柄只承载订阅自身状态
+     * （包括 Milo 的 {@code OpcUaSubscription}），因此声明为 {@code static}。</p>
+     *
      * @author wenbin
      * @since 2026-09-14
      */
-    private final class Subscription implements SubscriptionHandle {
+    private static final class Subscription implements SubscriptionHandle {
 
         private final String subscriptionId;
 
