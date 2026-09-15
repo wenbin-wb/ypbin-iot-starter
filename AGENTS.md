@@ -203,7 +203,7 @@ mvn -DskipTests install
 # 单模块测试（含 spotless 校验，绑定在 process-test-classes）
 mvn -pl ypbin-iot-core test
 
-# 集成测试（协议模拟器，启动较慢）
+# 集成测试（只跑 *IT.java：it profile 已显式跳过 surefire，不会把单测重复跑一遍）
 mvn -Pit verify
 
 # 生成 SBOM（供应链合规）
