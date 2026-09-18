@@ -53,7 +53,7 @@ jobs:
         run: mvn -B -ntp -Psbom verify -DskipTests
 
       - name: 归档 SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: '**/target/bom.json'
@@ -77,7 +77,7 @@ jobs:
 
       - name: 归档 JaCoCo 覆盖率报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jacoco-reports
           path: '**/target/site/jacoco/'
@@ -139,7 +139,7 @@ jobs:
 
       - name: 归档 Failsafe 报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: failsafe-reports
           path: '**/target/failsafe-reports/'
