@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           # 必须拉全量历史与 tag：否则 `git rev-parse vX` 必然失败，
           # 「tag 已存在」的校验会永远走不到报错分支（等于空转）。
@@ -77,7 +77,7 @@ jobs:
     environment: release
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 配置 JDK 21
         uses: actions/setup-java@v6
