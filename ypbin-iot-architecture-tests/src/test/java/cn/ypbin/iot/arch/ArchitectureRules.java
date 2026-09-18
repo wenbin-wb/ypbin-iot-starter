@@ -17,16 +17,11 @@ package cn.ypbin.iot.arch;
 
 import static com.tngtech.archunit.core.domain.JavaCall.Predicates.target;
 import static com.tngtech.archunit.core.domain.properties.HasName.Predicates.name;
-import static com.tngtech.archunit.lang.conditions.ArchConditions.not;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
-import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaModifier;
-import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
-import com.tngtech.archunit.lang.ConditionEvents;
-import com.tngtech.archunit.lang.SimpleConditionEvent;
 import java.util.Collections;
 import java.util.List;
 
@@ -153,7 +148,7 @@ public final class ArchitectureRules {
         return List.of(
                 methods().that().areDeclaredInClassesThat().resideInAnyPackage(
                                 CORE, RUNTIME, TRANSPORT, PROTOCOL, SPRING_LAYER)
-                        .should(not(beSynchronized()))
+                        .should().notHaveModifier(JavaModifier.SYNCHRONIZED)
                         .because("虚拟线程在 synchronized 内阻塞会 pinning 到载体线程，自研代码统一用 ReentrantLock"),
                 noClasses().that().resideInAnyPackage(CORE, RUNTIME, TRANSPORT, PROTOCOL, SPRING_LAYER)
                         .should().callMethodWhere(target(name("printStackTrace")))
@@ -172,20 +167,12 @@ public final class ArchitectureRules {
                         .because("字面量集合必须用 List.of()（AGENTS R12）"));
     }
 
-    /**
-     * 方法是否被 {@code synchronized} 修饰。
-     *
-     * @return 条件
+    /*
+     * ⚠️ 2026-09-18 删除自定义条件 `beSynchronized()`（原规则写的是 `should(not(beSynchronized()))`）：
+     * 它把「方法确实是 synchronized」写成了 **violated** 事件，再被外层的 not(...) 反转 ⇒
+     * 同步方法被判定为「满足」，整个规则**恒不报错**（形同虚设）。
+     * 现改用 ArchUnit 内建的 `notHaveModifier(JavaModifier.SYNCHRONIZED)`，语义直白、无需自造条件。
+     * 该缺陷由 `RuleEffectivenessTest` 的加严版自检抓出（原自检只断言"抛了 AssertionError"，
+     * 而 ArchUnit 的 failOnEmptyShould 默认 true，会因选择集为空抛同样的异常 ⇒ 假绿）。
      */
-    public static ArchCondition<JavaMethod> beSynchronized() {
-        return new ArchCondition<>("be synchronized") {
-            @Override
-            public void check(JavaMethod item, ConditionEvents events) {
-                if (item.getModifiers().contains(JavaModifier.SYNCHRONIZED)) {
-                    events.add(SimpleConditionEvent.violated(item,
-                            item.getFullName() + " is synchronized"));
-                }
-            }
-        };
-    }
 }
