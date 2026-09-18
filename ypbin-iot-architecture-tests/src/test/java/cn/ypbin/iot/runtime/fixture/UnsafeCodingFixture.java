@@ -13,13 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package cn.ypbin.iot.arch.fixture;
+package cn.ypbin.iot.runtime.fixture;
 
 import java.util.Collections;
 import java.util.List;
 
 /**
  * <b>故意违规的测试夹具</b>：集中放置编码铁律禁止的写法，用于验证规则有效性。
+ *
+ * <p>⚠️ <b>2026-09-18 修正</b>：本类原在 {@code cn.ypbin.iot.arch.fixture} 包，而编码规则的
+ * 目标包只含 {@code core/runtime/transport/protocol/spring} ⇒ 规则选择集为空，
+ * ArchUnit 的 {@code failOnEmptyShould=true} 会因「没有类可检查」抛错，
+ * 使自检<b>假通过</b>（全类 5 条编码规则的自检都受影响）。现落在 {@code cn.ypbin.iot.runtime.fixture}
+ * ——**故意违规的夹具必须位于规则目标包内**，否则自检毫无意义。</p>
  *
  * <p>违规项：{@code synchronized} 方法、{@code printStackTrace()}、{@code System.out}、
  * {@code Collections.emptyList()}。</p>

@@ -18,6 +18,8 @@ package cn.ypbin.iot.arch;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import cn.ypbin.iot.core.fixture.SpringInCoreLayerFixture;
+import cn.ypbin.iot.runtime.fixture.UnsafeCodingFixture;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.lang.ArchRule;
@@ -47,7 +49,7 @@ class RuleEffectivenessTest {
     @BeforeAll
     static void importFixtures() {
         fixtureClasses = new ClassFileImporter()
-                .importPackages("cn.ypbin.iot.arch.fixture", "cn.ypbin.iot.core.fixture");
+                .importPackages("cn.ypbin.iot.runtime.fixture", "cn.ypbin.iot.core.fixture");
     }
 
     @Test
@@ -61,36 +63,50 @@ class RuleEffectivenessTest {
     @Test
     @DisplayName("SELF-02 零 Spring 规则必须能捕捉 core 包下的 Spring 依赖")
     void springFreeRuleMustDetectViolation() {
-        assertRuleFails(ArchitectureRules.springFreeLayers().get(0));
+        assertRuleFails(ArchitectureRules.springFreeLayers().get(0), SpringInCoreLayerFixture.class);
     }
 
     @Test
     @DisplayName("SELF-03 synchronized 规则必须能捕捉违规")
     void synchronizedRuleMustDetectViolation() {
-        assertRuleFails(ArchitectureRules.codingRules().get(0));
+        assertRuleFails(ArchitectureRules.codingRules().get(0), UnsafeCodingFixture.class);
     }
 
     @Test
     @DisplayName("SELF-04 printStackTrace 规则必须能捕捉违规（母仓陷阱：不能按 owner 匹配）")
     void printStackTraceRuleMustDetectViolation() {
-        assertRuleFails(ArchitectureRules.codingRules().get(1));
+        assertRuleFails(ArchitectureRules.codingRules().get(1), UnsafeCodingFixture.class);
     }
 
     @Test
     @DisplayName("SELF-05 System.out 规则必须能捕捉违规")
     void systemOutRuleMustDetectViolation() {
-        assertRuleFails(ArchitectureRules.codingRules().get(2));
+        assertRuleFails(ArchitectureRules.codingRules().get(2), UnsafeCodingFixture.class);
     }
 
     @Test
     @DisplayName("SELF-06 Collections.emptyList 规则必须能捕捉违规")
     void collectionsEmptyListRuleMustDetectViolation() {
-        assertRuleFails(ArchitectureRules.codingRules().get(3));
+        assertRuleFails(ArchitectureRules.codingRules().get(3), UnsafeCodingFixture.class);
     }
 
-    private static void assertRuleFails(ArchRule rule) {
+    /**
+     * 断言「规则必须被指定夹具触发」。
+     *
+     * <p>⚠️ 这里**不能只断言抛了 {@code AssertionError}**：ArchUnit 的
+     * {@code failOnEmptyShould} 默认为 true，规则的选择集为空时同样会抛 {@code AssertionError}——
+     * 那样「规则恒为真/包匹配写错」与「规则正确报错」无法区分（本仓曾因此假绿）。
+     * 故额外要求**报错正文出现期望夹具的类名**：只有规则真的评估了该夹具才可能满足。</p>
+     *
+     * @param rule            待验证的规则
+     * @param expectedFixture 期望被该规则命中的违规夹具
+     */
+    private static void assertRuleFails(ArchRule rule, Class<?> expectedFixture) {
         assertThatThrownBy(() -> rule.check(fixtureClasses))
-                .as("规则 [%s] 未能捕捉故意违规的夹具 —— 该规则可能写成了恒为真，形同虚设", rule)
-                .isInstanceOf(AssertionError.class);
+                .as("规则 [%s] 未能捕捉故意违规的夹具 %s —— 该规则可能写成了恒为真；"
+                        + "也可能是夹具不在规则目标包内导致选择集为空而假通过",
+                        rule, expectedFixture.getSimpleName())
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining(expectedFixture.getName());
     }
 }
