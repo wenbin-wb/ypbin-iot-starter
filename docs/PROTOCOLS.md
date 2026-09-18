@@ -667,6 +667,23 @@ RTSP 与 ONVIF 是**配合关系而非并列关系**，因此**不建 `ypbin-iot
 3. **native epoll 必开**：10 万连接下 NIO 的空轮询与系统调用开销不可接受（见 DESIGN §5.2 N2/N3）；
 4. **`SO_REUSEPORT` 依赖 native epoll**，NIO 下无法使用。
 
+**4.2 线的评估记录（2026-09-18，结论：暂不采用）**：
+
+- **已实测**：把 `netty.version` 置为 `4.2.18.Final` 后，全反应堆（`transport` / `protocol-modbus` /
+  `protocol-mqtt` / `protocol-opcua` / `spring-boot-starter` / `runtime`）的 `dependency:tree`
+  里 `io.netty:*` **全部收敛到 `4.2.18.Final`**（无 4.1/4.2 混用）；对应 CI 的构建与集成测试作业
+  （含嵌入式 broker 的 MQTT 往返与多协议场景）全绿。
+- **暂不采用的理由**：依本节决策理由第 1 条，接入层**不做首发尝鲜**；而 `4.2.18.Final` 于 **2026-09-09** GA，
+  距评估时不足两周，且上述验证覆盖不到该策略真正担心的面——万级长连接长稳、native epoll、
+  **TLS 端点校验（4.2 改了默认值）**与**分配器（4.2 默认由 pooled 改为 adaptive）**。
+- **重新评估的触发条件**（任一满足即重新评估）：① 4.2 线稳定运行 ≥2 个季度；
+  ② 在用的协议库（`digitalpetri modbus` / `eclipse milo` / `hivemq-mqtt-client` / `moquette`）
+  任一声明支持 4.2；③ 4.1 线停更，或出现只修 4.2 的安全问题。
+- **采用时必须同批完成的三件事**（Netty 官方 4.2 迁移指南要求）：① 客户端 TLS 显式配置端点校验
+  （`SslContextBuilder.endpointIdentificationAlgorithm`）；② 显式指定分配器
+  （`-Dio.netty.allocator.type=pooled`，DESIGN §5.10 已有该项）；③ 确认全链路无 4.1/4.2 混用
+  （由 `dependencyConvergence` 门禁兜底）。
+
 ### 4.2 MQTT
 
 | 候选 | 坐标 | 版本 | 许可 | 评价 |

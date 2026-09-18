@@ -68,7 +68,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 网络底座：锁定 4.1 线最新补丁版（PROTOCOLS §4.1） -->
-        <netty.version>4.2.18.Final</netty.version>
+        <netty.version>4.1.138.Final</netty.version>
 
         <!-- 协议库：Modbus（EPL-2.0） -->
         <modbus.version>2.1.6</modbus.version>
