@@ -47,6 +47,11 @@
   **模块集合不得静默缩小**）、`export-coverage.mjs`（覆盖率快照，由构建产物生成）、`preflight.sh`（发布前总检，8 步含集成测试）
 - ✅ 发布前置：GPG + `central-publishing-maven-plugin`（在根 pom 的 release profile；`-Prelease` 反应堆已实测不含非发布模块）
 - ⬜ 发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号
+  - 📌 **发布时机（2026-09-19 决定）**：**先让 `ypbin-iot-cloud` 的 P4b「access 接协议栈」在本地
+    用 SNAPSHOT 跑通，再发 0.1.0**。理由：access 是 iot-starter 的第一个真实宿主，
+    首个正式版应当带着「有宿主真的在用它」这个事实发布；用 `mvn install` 出来的本地 SNAPSHOT
+    足以支撑 P4b 的开发与验证（`ypbin-iot-cloud` 侧的 `ypbin-iot-bom` import 仍留占位）。
+    若 P4b 发现契约缺口，改在发布前比改在发布后便宜得多。
 
 ## M2 · 协议扩容（⬜）
 
