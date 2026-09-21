@@ -26,6 +26,12 @@
     <name>${project.artifactId}</name>
     <description>ypbin-iot-starter —— 多协议物联网接入框架，只做协议对接</description>
     <url>https://github.com/wenbin-wb/ypbin-iot-starter</url>
+    <scm>
+        <connection>scm:git:https://github.com/wenbin-wb/ypbin-iot-starter.git</connection>
+        <developerConnection>scm:git:https://github.com/wenbin-wb/ypbin-iot-starter.git</developerConnection>
+        <url>https://github.com/wenbin-wb/ypbin-iot-starter</url>
+        <tag>HEAD</tag>
+    </scm>
 
     <licenses>
         <license>
@@ -61,7 +67,7 @@
     </modules>
 
     <properties>
-        <revision>0.1.0-SNAPSHOT</revision>
+        <revision>0.1.0</revision>
         <java.version>21</java.version>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

@@ -3,9 +3,11 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)：`主版本.次版本.修订号`。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-当前开发版：`0.1.0-SNAPSHOT`（**尚未发布到 Maven Central**）。
+当前开发版：`0.2.0-SNAPSHOT`。
 
-## [未发布]
+已发布：**`0.1.0`（2026-09-21，Maven Central）**——首个正式版，由 `ypbin-access` 作为首个真实宿主接入验证。
+
+## [0.1.0] - 2026-09-21
 
 ### 新增
 
