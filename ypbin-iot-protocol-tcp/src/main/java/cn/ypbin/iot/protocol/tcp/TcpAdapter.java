@@ -67,6 +67,15 @@ public final class TcpAdapter implements ProtocolAdapter {
     /** 链路不活跃的消息键。 */
     public static final String MSG_CONNECTION_INACTIVE = "iot.tcp.connection.inactive";
 
+    /** 载荷非合法 UTF-8（payload-format=text/number 时）的消息键。 */
+    public static final String MSG_PAYLOAD_NOT_UTF8 = "iot.tcp.payload.not-utf8";
+
+    /** 载荷无法解析为数值（payload-format=number 时）的消息键。 */
+    public static final String MSG_PAYLOAD_NOT_NUMBER = "iot.tcp.payload.not-number";
+
+    /** 订阅地址超过 1 个（TCP 是单点位透传流）的消息键。 */
+    public static final String MSG_MULTI_ADDRESS_UNSUPPORTED = "iot.tcp.subscribe.multi-address-unsupported";
+
     private static final ProtocolDescriptor DESCRIPTOR = ProtocolDescriptor.builder()
             .code(PROTOCOL_CODE)
             .name("TCP 透传")
@@ -75,6 +84,7 @@ public final class TcpAdapter implements ProtocolAdapter {
             .capabilities(ProtocolCapability.WRITE, ProtocolCapability.SUBSCRIBE_STREAM)
             .runtimeVersionRange("0.1.0", "1.0.0")
             .attribute("defaultPort", "0")
+            .attribute("payloadFormat", "binary|text|number")
             .build();
 
     private final NettyTransport transport;
@@ -83,17 +93,34 @@ public final class TcpAdapter implements ProtocolAdapter {
 
     private final Duration idleInterval;
 
+    /** 入站载荷解码格式（默认 binary=向后兼容）。 */
+    private final TcpPayloadFormat payloadFormat;
+
     /**
-     * 创建适配器。
+     * 创建适配器（默认 {@code payload-format=binary}，与 0.1.0 行为一致）。
      *
      * @param transport    传输底座
      * @param framingSpec  帧定界规格
      * @param idleInterval 空闲检测间隔
      */
     public TcpAdapter(NettyTransport transport, FramingSpec framingSpec, Duration idleInterval) {
+        this(transport, framingSpec, idleInterval, TcpPayloadFormat.BINARY);
+    }
+
+    /**
+     * 创建适配器。
+     *
+     * @param transport    传输底座
+     * @param framingSpec  帧定界规格
+     * @param idleInterval 空闲检测间隔
+     * @param payloadFormat 入站载荷解码格式（{@link TcpPayloadFormat#BINARY}=原样交付，向后兼容）
+     */
+    public TcpAdapter(NettyTransport transport, FramingSpec framingSpec, Duration idleInterval,
+            TcpPayloadFormat payloadFormat) {
         this.transport = transport;
         this.framingSpec = framingSpec;
         this.idleInterval = idleInterval;
+        this.payloadFormat = payloadFormat == null ? TcpPayloadFormat.BINARY : payloadFormat;
     }
 
     @Override
@@ -123,7 +150,7 @@ public final class TcpAdapter implements ProtocolAdapter {
     public CompletionStage<DeviceSession> bind(ProtocolConnection connection, DeviceSpec device,
             AdapterContext context) {
         if (connection instanceof NettyChannelConnection nettyConnection) {
-            TcpSession session = new TcpSession(device, nettyConnection, context);
+            TcpSession session = new TcpSession(device, nettyConnection, context, payloadFormat);
             nettyConnection.bindSession(session);
             return CompletableFuture.completedFuture(session);
         }

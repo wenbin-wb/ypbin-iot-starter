@@ -31,6 +31,7 @@ import cn.ypbin.iot.core.model.Endpoint;
 import cn.ypbin.iot.core.model.PointAddress;
 import cn.ypbin.iot.core.model.PointValue;
 import cn.ypbin.iot.core.model.PointWrite;
+import cn.ypbin.iot.core.model.Quality;
 import cn.ypbin.iot.core.model.SubscribeRequest;
 import cn.ypbin.iot.core.model.SubscriptionHandle;
 import cn.ypbin.iot.core.model.TlsOptions;
@@ -59,6 +60,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -87,6 +89,9 @@ class TcpSessionBehaviourTest {
 
     private TcpAdapter adapter;
 
+    /** payload-format 用例专用的适配器（用例内创建，tearDown 一并关闭）。 */
+    private final List<TcpAdapter> formatAdapters = new ArrayList<>();
+
     private DefaultTaskScheduler scheduler;
 
     private AdapterContext context;
@@ -107,6 +112,7 @@ class TcpSessionBehaviourTest {
 
     @AfterEach
     void tearDown() {
+        formatAdapters.forEach(TcpAdapter::close);
         adapter.close();
         transport.close();
         scheduler.close();
@@ -234,14 +240,17 @@ class TcpSessionBehaviourTest {
     @Test
     @DisplayName("TCP-07 配置默认值与帧定界规格构造")
     void propertiesMustProduceFramingSpec() {
-        TcpProperties defaults = new TcpProperties(null, null, null, null, null, null, null, null, null, null);
+        TcpProperties defaults = new TcpProperties(null, null, null, null, null, null, null, null, null, null, null);
         assertThat(defaults.isEnabled()).isTrue();
         assertThat(defaults.framingMode()).isEqualTo(FramingMode.NONE);
         assertThat(defaults.maxFrameLength()).isEqualTo(FramingSpec.DEFAULT_MAX_FRAME_LENGTH);
         assertThat(defaults.toFramingSpec().mode()).isEqualTo(FramingMode.NONE);
+        assertThat(defaults.payloadFormat())
+                .as("payload-format 默认 BINARY（向后兼容 0.1.0）")
+                .isEqualTo(TcpPayloadFormat.BINARY);
 
         TcpProperties lengthField = new TcpProperties(true, FramingMode.LENGTH_FIELD, 4096, 0, 2, -4, 2,
-                null, Duration.ofSeconds(10), 2);
+                null, Duration.ofSeconds(10), 2, null);
         FramingSpec lengthSpec = lengthField.toFramingSpec();
         assertThat(lengthSpec.mode()).isEqualTo(FramingMode.LENGTH_FIELD);
         assertThat(lengthSpec.lengthFieldLength()).isEqualTo(2);
@@ -249,18 +258,126 @@ class TcpSessionBehaviourTest {
         assertThat(lengthSpec.maxFrameLength()).isEqualTo(4096);
 
         TcpProperties delimiter = new TcpProperties(true, FramingMode.DELIMITER, 1024, 0, 0, 0, 0, "\r\n",
-                Duration.ZERO, 1);
+                Duration.ZERO, 1, TcpPayloadFormat.TEXT);
         FramingSpec delimiterSpec = delimiter.toFramingSpec();
         assertThat(delimiterSpec.mode()).isEqualTo(FramingMode.DELIMITER);
         assertThat(delimiterSpec.delimiter()).containsExactly(13, 10);
+        assertThat(delimiter.payloadFormat()).isEqualTo(TcpPayloadFormat.TEXT);
+    }
+
+    @Test
+    @DisplayName("TCP-08 UP-3：payload-format=text 交付严格 UTF-8 字符串；非法字节帧产出 BAD（不是 U+FFFD 脏串）")
+    void payloadFormatTextDeliversStrictUtf8OrBad() throws Exception {
+        TcpSession session = openSession(TcpPayloadFormat.TEXT);
+        try {
+            List<PointValue> received = new CopyOnWriteArrayList<>();
+            session.subscribe(SubscribeRequest.of(List.of(PointAddress.of("stream"))), received::add)
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"), "室温 23.5")))
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 1, Duration.ofSeconds(3));
+
+            PointValue good = received.get(0);
+            assertThat(good.quality()).isEqualTo(Quality.GOOD);
+            assertThat(good.value()).isEqualTo("室温 23.5");
+
+            // 非 UTF-8 帧：0xFF 0xFE 是非法 UTF-8 序列 ⇒ BAD，绝不出现 U+FFFD（变异点：换成 new String(bytes, UTF_8) 必红）
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"), new byte[]{(byte) 0xFF, (byte) 0xFE})))
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 2, Duration.ofSeconds(3));
+
+            PointValue bad = received.get(1);
+            assertThat(bad.quality()).isEqualTo(Quality.BAD);
+            assertThat(bad.qualityReason()).isEqualTo(TcpAdapter.MSG_PAYLOAD_NOT_UTF8);
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    @DisplayName("TCP-09 UP-3：payload-format=number 解析数值；非数值产出 BAD")
+    void payloadFormatNumberDeliversDoubleOrBad() throws Exception {
+        TcpSession session = openSession(TcpPayloadFormat.NUMBER);
+        try {
+            List<PointValue> received = new CopyOnWriteArrayList<>();
+            session.subscribe(SubscribeRequest.of(List.of(PointAddress.of("stream"))), received::add)
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"), "23.5")))
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 1, Duration.ofSeconds(3));
+            PointValue good = received.get(0);
+            assertThat(good.quality()).isEqualTo(Quality.GOOD);
+            assertThat(good.value()).isEqualTo(23.5d);
+
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"), "not-a-number")))
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 2, Duration.ofSeconds(3));
+            PointValue bad = received.get(1);
+            assertThat(bad.quality()).isEqualTo(Quality.BAD);
+            assertThat(bad.qualityReason()).isEqualTo(TcpAdapter.MSG_PAYLOAD_NOT_NUMBER);
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    @DisplayName("TCP-10 UP-3：payload-format=binary（默认）原样交付 byte[]，与 0.1.0 逐字一致")
+    void payloadFormatBinaryDeliversRawBytesByDefault() throws Exception {
+        // 默认构造（3 参数）即 binary，验证向后兼容
+        TcpSession session = openSession();
+        try {
+            List<PointValue> received = new CopyOnWriteArrayList<>();
+            session.subscribe(SubscribeRequest.of(List.of(PointAddress.of("stream"))), received::add)
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+
+            byte[] frame = new byte[]{(byte) 0xDE, (byte) 0xAD, (byte) 0xBE, (byte) 0xEF};
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"), frame)))
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 1, Duration.ofSeconds(3));
+
+            PointValue value = received.get(0);
+            assertThat(value.quality()).isEqualTo(Quality.GOOD);
+            assertThat((byte[]) value.value()).containsExactly((byte) 0xDE, (byte) 0xAD, (byte) 0xBE, (byte) 0xEF);
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    @DisplayName("TCP-11 UP-4：订阅多个地址 fail-fast（TCP 是单点位透传流，绝不静默只交付第 0 个）")
+    void subscribeWithMultipleAddressesMustFailFast() throws Exception {
+        TcpSession session = openSession();
+        try {
+            CompletionStage<SubscriptionHandle> stage = session.subscribe(
+                    SubscribeRequest.of(List.of(PointAddress.of("a"), PointAddress.of("b"))),
+                    ignored -> { });
+            assertThatThrownBy(() -> stage.toCompletableFuture().get(3, TimeUnit.SECONDS))
+                    .as("多地址订阅必须显式失败，而不是静默只交付第 0 个点位")
+                    .hasCauseInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(TcpAdapter.MSG_MULTI_ADDRESS_UNSUPPORTED);
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
     }
 
     private TcpSession openSession() {
+        return openSession(null);
+    }
+
+    /** 以指定 payload-format 打开会话（null = 适配器默认 binary）。 */
+    private TcpSession openSession(TcpPayloadFormat format) {
+        TcpAdapter effective = adapter;
+        if (format != null) {
+            effective = new TcpAdapter(transport, FramingSpec.none(), Duration.ZERO, format);
+            formatAdapters.add(effective);
+        }
         NettyChannelConnection connection = transport.connect(connectionSpec(), Duration.ZERO)
                 .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
         DeviceSpec device = new DeviceSpec("tcp-device", "TCP 设备", CODE, "tcp-conn", "",
                 Duration.ZERO, Map.of());
-        return (TcpSession) adapter.bind(connection, device, context)
+        return (TcpSession) effective.bind(connection, device, context)
                 .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
     }
 
