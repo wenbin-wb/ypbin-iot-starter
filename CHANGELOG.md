@@ -7,6 +7,26 @@
 
 已发布：**`0.1.0`（2026-09-21，Maven Central）**——首个正式版，由 `ypbin-access` 作为首个真实宿主接入验证。
 
+## [未发布]（0.2.0-SNAPSHOT）
+
+### 修复
+
+- **TCP 透传整帧当值、曲线画不出（UP-3，#13）**：新增 `ypbin.iot.protocol.tcp.payload-format`
+  （`binary`（默认，向后兼容）/`text`（严格 UTF-8）/`number`），`TcpSession` 按格式解码入站帧——
+  非法字节/非数值帧产出 **BAD 质量 + 明确消息键**（不再是 `[B@<hash>` 字面文本、也不再静默 GOOD）。
+- **TCP 订阅 N 点位只投递第 0 个（UP-4，#15）**：明示「单点位透传流」契约——`subscribe()`
+  对多地址 **fail-fast**（拒绝「声称订阅 N 个点位却静默只交付 1 个」）；一帧多点位的
+  `valueSelector` 语义列为后续演进项。
+- **建链超时死键（UP-2，#14）**：`ypbin.iot.protocol.<code>.connect-timeout` 从「有绑定、无消费」
+  变为活键——宿主未显式给建链超时（恰为默认值）时用配置值覆盖（`ConnectionSpec.withConnectTimeout`）；
+  绑定编排的 `probe/acquire/bind` 超时随之生效（connect-timeout=2s 时一趟绑定最坏 2s，不再恒为 10s 饿死租约）。
+- **iotMetricsRecorder bean 竞争（UP-11，#16）**：`IotMicrometerAutoConfiguration` 声明
+  `afterName=org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration`，
+  修正 `@ConditionalOnBean(MeterRegistry)` 求值时机；classpath 有 micrometer 却仍回退 Noop 时日志升 **WARN**。
+- **辅助缓冲无消费者噪声（UP-12，#17）**：`NettyChannelConnection` 的入站缓冲**惰性启用**——
+  无 `drainFrames()` 消费者时不入队、不计数、不告警；缓冲溢出首帧 WARN、其后 DEBUG，
+  计数语义注明「淘汰的是辅助缓冲副本，不代表数据面投递丢失」。
+
 ## [0.1.0] - 2026-09-21
 
 ### 新增

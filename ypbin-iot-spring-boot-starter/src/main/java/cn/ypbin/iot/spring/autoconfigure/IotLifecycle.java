@@ -195,10 +195,15 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         ProtocolAdapter adapter = adapterOptional.get();
         AdapterContext context = contextOptional.get();
         DeviceSpec effective = withDefaultPollInterval(device);
+        // UP-2：把 ypbin.iot.protocol.<code>.connect-timeout 变成「建链超时的配置默认值」——
+        // 宿主 provider 未显式给超时（恰为 DEFAULT）时用配置值覆盖（死键变活键）；
+        // 绑定编排的各 orTimeout 也跟随该值（connect-timeout=2s 时一趟绑定最坏 2s，不再恒为 10s 饿死租约）。
+        ConnectionSpec spec = applyConfiguredConnectTimeout(specOptional.get());
+        Duration bindTimeout = spec.connectTimeout();
         if (properties.devices().isProbeBeforeBind()) {
-            ProbeResult probe = adapter.probe(specOptional.get(), context)
+            ProbeResult probe = adapter.probe(spec, context)
                     .toCompletableFuture()
-                    .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    .orTimeout(bindTimeout.toMillis(), TimeUnit.MILLISECONDS)
                     .handle((result, error) -> error == null ? result : null)
                     .join();
             if (probe == null || !probe.reachable()) {
@@ -212,15 +217,15 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             // 注意用 detach 而非 unbind：重连路径会走到这里，不能把归属与重连一起清掉
             detach(device.deviceId());
             ConnectionRegistry.ConnectionHandle handle = connectionRegistry
-                    .acquire(adapter, specOptional.get(), context)
+                    .acquire(adapter, spec, context)
                     .toCompletableFuture()
-                    .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    .orTimeout(bindTimeout.toMillis(), TimeUnit.MILLISECONDS)
                     .join();
             DeviceSession session;
             try {
                 session = adapter.bind(handle.connection(), effective, context)
                         .toCompletableFuture()
-                        .orTimeout(BIND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                        .orTimeout(bindTimeout.toMillis(), TimeUnit.MILLISECONDS)
                         .join();
             } catch (RuntimeException ex) {
                 // 绑定失败必须归还链路引用：否则引用计数永不为零、空闲回收永不触发、配额泄漏
@@ -555,6 +560,29 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * 应用协议级建链超时配置（UP-2：死键变活键）。
+     *
+     * <p>规则：宿主 provider 显式提供了超时（非 {@link ConnectionSpec#DEFAULT_CONNECT_TIMEOUT}）
+     * 时尊重宿主；否则用 {@code ypbin.iot.protocol.<code>.connect-timeout} 的配置值。
+     * 这样「看起来可配、实际不生效」的假缝被补上——协议模块内部的
+     * {@code AdapterSettings.connectTimeout} 与本处建链超时口径一致。</p>
+     *
+     * @param spec 宿主提供的规格（非空）
+     * @return 应用配置超时后的规格
+     */
+    private ConnectionSpec applyConfiguredConnectTimeout(ConnectionSpec spec) {
+        if (spec.connectTimeout() != ConnectionSpec.DEFAULT_CONNECT_TIMEOUT) {
+            // 宿主显式给过超时：以宿主为准
+            return spec;
+        }
+        Duration configured = properties.protocol(spec.protocol().value()).connectTimeout();
+        if (configured == null || configured.isZero() || configured.isNegative()) {
+            return spec;
+        }
+        return spec.withConnectTimeout(configured);
     }
 
     private ValidationResult validate(DeviceSpec device) {

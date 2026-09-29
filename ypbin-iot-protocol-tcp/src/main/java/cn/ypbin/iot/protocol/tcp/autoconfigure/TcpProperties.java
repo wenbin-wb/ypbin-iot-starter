@@ -15,6 +15,7 @@
  */
 package cn.ypbin.iot.protocol.tcp.autoconfigure;
 
+import cn.ypbin.iot.protocol.tcp.TcpPayloadFormat;
 import cn.ypbin.iot.transport.FramingMode;
 import cn.ypbin.iot.transport.FramingSpec;
 import java.nio.charset.StandardCharsets;
@@ -35,6 +36,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param delimiter          分隔符（DELIMITER 模式）
  * @param idleInterval       空闲检测间隔
  * @param workerThreads      Netty worker 线程数
+ * @param payloadFormat      入站载荷解码格式（{@link TcpPayloadFormat}；默认 {@code BINARY}=向后兼容）
  * @author wenbin
  * @since 2026-09-13
  */
@@ -49,7 +51,8 @@ public record TcpProperties(
         @Nullable Integer initialBytesToStrip,
         @Nullable String delimiter,
         @Nullable Duration idleInterval,
-        @Nullable Integer workerThreads) {
+        @Nullable Integer workerThreads,
+        @Nullable TcpPayloadFormat payloadFormat) {
 
     /** 配置前缀。 */
     public static final String PREFIX = "ypbin.iot.protocol.tcp";
@@ -77,6 +80,19 @@ public record TcpProperties(
         return idleInterval == null ? Duration.ZERO : idleInterval;
     }
 
+    /**
+     * 归一化后的入站载荷解码格式。
+     *
+     * <p><b>默认 {@link TcpPayloadFormat#BINARY}</b>：不配置时与 0.1.0 行为逐字一致（向后兼容）。
+     * 需要值语义（曲线/聚合/告警可用）时显式配置 {@code text} / {@code number}（UP-3）。</p>
+     *
+     * @return 载荷格式（恒非空）
+     */
+    @Override
+    public TcpPayloadFormat payloadFormat() {
+        return payloadFormat == null ? TcpPayloadFormat.BINARY : payloadFormat;
+    }
+
 
     /**
      * 紧凑构造器：归一化默认值，保证开箱即用。
@@ -91,6 +107,7 @@ public record TcpProperties(
         lengthAdjustment = lengthAdjustment == null ? 0 : lengthAdjustment;
         initialBytesToStrip = initialBytesToStrip == null ? 0 : initialBytesToStrip;
         idleInterval = idleInterval == null ? Duration.ZERO : idleInterval;
+        payloadFormat = payloadFormat == null ? TcpPayloadFormat.BINARY : payloadFormat;
     }
 
     /**

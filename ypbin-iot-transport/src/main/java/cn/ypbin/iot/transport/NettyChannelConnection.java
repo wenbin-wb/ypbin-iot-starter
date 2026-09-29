@@ -82,7 +82,20 @@ public final class NettyChannelConnection implements ProtocolConnection {
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    private final AtomicLong droppedFrames = new AtomicLong();
+    /** 被淘汰的辅助缓冲副本帧数（语义见 {@link #droppedFrames()}；UP-12 起内部改名，公共方法名兼容保留） */
+    private final AtomicLong auxBufferEvicted = new AtomicLong();
+
+    /**
+     * 辅助入站缓冲是否已被启用（首次调用 {@link #drainFrames()} 后置位）。
+     *
+     * <p>UP-12 修复：push 模式宿主（只挂帧监听、从不 drain）不需要该缓冲——无条件入队会在
+     * 缓冲填满后每帧淘汰一次并 WARN（计数与帧率同步增长，易被误判为数据面丢帧）。
+     * 因此缓冲<b>惰性启用</b>：无 drain 消费者时不入队、不计数、不告警；首次 drain 后启用。</p>
+     */
+    private final AtomicBoolean drainEnabled = new AtomicBoolean(false);
+
+    /** 缓冲溢出是否已 WARN 过一次（后续降 DEBUG，避免每帧一条淹没日志） */
+    private volatile boolean overflowWarned = false;
 
     private volatile SessionState state = SessionState.ONLINE;
 
@@ -225,9 +238,15 @@ public final class NettyChannelConnection implements ProtocolConnection {
     /**
      * 取出并清空当前缓冲的全部入站帧。
      *
+     * <p><strong>UP-12 语义</strong>：本缓冲是<b>辅助</b>副本——入站帧已无条件经 push
+     * 监听（{@link #addFrameListener}）交付给会话，这里只是再留一份供拉取消费。
+     * 首次调用本方法会<b>启用</b>该缓冲（此前 push-only 宿主不启用、不计数、不告警）。</p>
+     *
      * @return 帧列表；无数据时返回空列表
      */
     public List<byte[]> drainFrames() {
+        // 惰性启用：一旦有人以拉模式消费，后续帧开始入队（启用前的帧不回溯）
+        drainEnabled.set(true);
         lock.lock();
         try {
             List<byte[]> drained = new ArrayList<>(inbound);
@@ -239,12 +258,16 @@ public final class NettyChannelConnection implements ProtocolConnection {
     }
 
     /**
-     * 丢弃的入站帧数量（缓冲溢出时累加）。
+     * 被淘汰的入站缓冲帧数（缓冲启用且溢出时累加）。
      *
-     * @return 丢弃帧数
+     * <p><strong>语义澄清（UP-12）</strong>：此计数<b>不代表数据面投递丢失</b>——
+     * 入站帧已全部经 push 监听交付，被淘汰的是「无人及时排空的辅助缓冲副本」。
+     * 计量面（受理==发出==落库）是对账真丢数据的判据，本计数只反映拉模式消费者的排空节奏。</p>
+     *
+     * @return 淘汰的辅助缓冲帧数
      */
     public long droppedFrames() {
-        return droppedFrames.get();
+        return auxBufferEvicted.get();
     }
 
     /**
@@ -261,7 +284,7 @@ public final class NettyChannelConnection implements ProtocolConnection {
             this.inboundCapacity = capacity;
             while (inbound.size() > capacity) {
                 inbound.pollFirst();
-                droppedFrames.incrementAndGet();
+                auxBufferEvicted.incrementAndGet();
             }
         } finally {
             lock.unlock();
@@ -283,17 +306,29 @@ public final class NettyChannelConnection implements ProtocolConnection {
      * @param payload 帧内容
      */
     void onFrame(byte[] payload) {
-        lock.lock();
-        try {
-            while (inbound.size() >= inboundCapacity) {
-                inbound.pollFirst();
-                long dropped = droppedFrames.incrementAndGet();
-                log.warn("[ypbin-iot] inbound buffer overflow on connection {}; dropped frames={}",
-                        spec.connectionId(), dropped);
+        // UP-12：无 drain 消费者（缓冲未启用）时不入队、不计数、不告警。
+        // 溢出的只能是「无人及时排空的辅助缓冲副本」，push 交付在下方锁外无条件执行，不受影响。
+        if (drainEnabled.get()) {
+            lock.lock();
+            try {
+                while (inbound.size() >= inboundCapacity) {
+                    inbound.pollFirst();
+                    long evicted = auxBufferEvicted.incrementAndGet();
+                    if (!overflowWarned) {
+                        overflowWarned = true;
+                        log.warn("[ypbin-iot] inbound aux buffer overflow on connection {}; "
+                                        + "evicted aux frames={}（淘汰的是未及时 drain 的辅助缓冲副本，不表示数据面丢帧；"
+                                        + "请消费方及时调用 drainFrames()，或移除不需要的拉模式消费者）",
+                                spec.connectionId(), evicted);
+                    } else {
+                        log.debug("[ypbin-iot] inbound aux buffer overflow on connection {}; evicted aux frames={}",
+                                spec.connectionId(), evicted);
+                    }
+                }
+                inbound.addLast(payload);
+            } finally {
+                lock.unlock();
             }
-            inbound.addLast(payload);
-        } finally {
-            lock.unlock();
         }
         for (Consumer<byte[]> listener : frameListeners) {
             try {

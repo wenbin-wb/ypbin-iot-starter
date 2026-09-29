@@ -78,4 +78,20 @@ public record ConnectionSpec(
         return new ConnectionSpec(connectionId, protocol, endpoint, DEFAULT_CONNECT_TIMEOUT,
                 DEFAULT_REQUEST_TIMEOUT, TlsOptions.disabled(), null, Map.of());
     }
+
+    /**
+     * 复制本规格并替换建链超时（其余字段不变）。
+     *
+     * <p><b>UP-2 用途</b>：框架在「宿主未显式提供超时（即恰为 {@link #DEFAULT_CONNECT_TIMEOUT}）」
+     * 时，用 {@code ypbin.iot.protocol.<code>.connect-timeout} 的配置值覆盖，
+     * 使该配置项从「有绑定、无消费」的死键变为真正影响建链的活键。</p>
+     *
+     * @param connectTimeout 新建链超时（非空）
+     * @return 替换超时后的规格
+     */
+    public ConnectionSpec withConnectTimeout(Duration connectTimeout) {
+        Objects.requireNonNull(connectTimeout, "connectTimeout must not be null");
+        return new ConnectionSpec(connectionId, protocol, endpoint, connectTimeout, requestTimeout,
+                tls, credentialRef, properties);
+    }
 }

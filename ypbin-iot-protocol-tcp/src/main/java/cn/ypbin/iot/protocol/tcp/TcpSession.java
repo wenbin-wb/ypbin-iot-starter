@@ -26,6 +26,7 @@ import cn.ypbin.iot.core.model.PointAddress;
 import cn.ypbin.iot.core.model.PointValue;
 import cn.ypbin.iot.core.model.PointWrite;
 import cn.ypbin.iot.core.model.PointWriteStatus;
+import cn.ypbin.iot.core.model.Quality;
 import cn.ypbin.iot.core.model.ReadRequest;
 import cn.ypbin.iot.core.model.ReadResult;
 import cn.ypbin.iot.core.model.SessionState;
@@ -35,6 +36,7 @@ import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.transport.NettyChannelConnection;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -68,7 +70,16 @@ import org.slf4j.LoggerFactory;
  * 需要请求-响应语义的协议（Modbus、SNMP）应实现自己的适配器。</p>
  *
  * <p>TCP 报文中收到的字节帧被包装为 {@link PointValue}，其 {@code address} 使用订阅标识
- * （即调用方给出的订阅地址之一），{@code value} 为 {@code byte[]}。</p>
+ * （即调用方给出的订阅地址），{@code value} 按 {@link TcpPayloadFormat} 解码
+ * （默认 {@code binary}：原样交付 {@code byte[]}；{@code text}/{@code number} 见下方载荷解码节）。</p>
+ *
+ * <p><b>单点位契约（UP-4）</b>：裸 TCP 帧没有寻址语义，一次订阅只接受 <b>1 个地址</b>
+ * （{@code subscribe()} 对多地址 <b>fail-fast</b>——拒绝在「声称订阅了 N 个点位」的同时静默只交付 1 个）；
+ * 一帧可寻址多点位的 valueSelector 语义为后续演进项。</p>
+ *
+ * <p><b>载荷解码（UP-3）</b>：入站帧按 {@code ypbin.iot.protocol.tcp.payload-format} 解码——
+ * {@code binary}（默认，原样交付 {@code byte[]}，向后兼容）/ {@code text}（严格 UTF-8）/
+ * {@code number}（数值）；解码失败产出 <b>BAD 质量 + 明确消息键</b>，不把畸形内容当 GOOD 交付。</p>
  *
  * @author wenbin
  * @since 2026-09-13
@@ -85,6 +96,9 @@ public final class TcpSession implements DeviceSession {
 
     private final AdapterContext context;
 
+    /** 入站载荷解码格式（见 {@link TcpPayloadFormat}；binary=原样交付，向后兼容）。 */
+    private final TcpPayloadFormat payloadFormat;
+
     private final Instant boundAt;
 
     private final Map<String, TcpSubscription> subscriptions = new ConcurrentHashMap<>();
@@ -98,15 +112,17 @@ public final class TcpSession implements DeviceSession {
     /**
      * 创建会话。
      *
-     * @param device     设备规格
-     * @param connection 传输链路
-     * @param context    适配器上下文
+     * @param device       设备规格
+     * @param connection   传输链路
+     * @param context      适配器上下文
+     * @param payloadFormat 入站载荷解码格式（{@link TcpPayloadFormat#BINARY}=原样交付，向后兼容）
      */
     public TcpSession(DeviceSpec device, NettyChannelConnection connection,
-            AdapterContext context) {
+            AdapterContext context, TcpPayloadFormat payloadFormat) {
         this.device = device;
         this.connection = connection;
         this.context = context;
+        this.payloadFormat = payloadFormat == null ? TcpPayloadFormat.BINARY : payloadFormat;
         this.boundAt = context.clock().instant();
         this.sessionId = device.deviceId() + "@" + connection.connectionId();
     }
@@ -215,6 +231,16 @@ public final class TcpSession implements DeviceSession {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("session already closed: " + sessionId));
         }
+        // UP-4（B 方案）：TCP 透传是「单点位流」——裸 TCP 帧没有寻址语义，无法把一帧派发到 0..N-1 个点位。
+        // 此前只取第 0 个地址、其余点位静默无数据（且 subscribe() 返回的句柄仍声称含全部 N 个地址）。
+        // fail-fast：订阅多于 1 个地址直接拒绝，绝不在「声称订阅了 N 个点位」的同时静默只交付 1 个。
+        // （一帧可寻址多点位的 valueSelector 语义为后续演进项，见 issue #15 期望 A。）
+        if (request.addresses().size() > 1) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(
+                    TcpAdapter.MSG_MULTI_ADDRESS_UNSUPPORTED
+                            + ": tcp 透传为单点位流，一次订阅仅支持 1 个地址，收到 "
+                            + request.addresses().size() + " 个"));
+        }
         String subscriptionId = "tcp-" + subscriptionSequence.incrementAndGet();
         PointAddress streamAddress = request.addresses().get(0);
         TcpSubscription subscription = new TcpSubscription(subscriptionId, request.addresses(), listener);
@@ -292,7 +318,7 @@ public final class TcpSession implements DeviceSession {
         if (!subscription.active()) {
             return;
         }
-        PointValue value = PointValue.good(address, payload, context.clock().instant());
+        PointValue value = decode(address, payload);
         subscription.incrementDelivered();
         context.metrics().recordSubscriptionBatch(1);
         DataListener listener = subscription.listener();
@@ -303,6 +329,44 @@ public final class TcpSession implements DeviceSession {
         }
         context.egress().emit(new DataBatch(device.deviceId(), device.protocol(),
                 connection.connectionId(), context.clock().instant(), List.of(value)));
+    }
+
+    /**
+     * 按配置的 {@link TcpPayloadFormat} 解码入站帧为 {@link PointValue}。
+     *
+     * <p><b>解码失败显式可见（UP-3）</b>：非 UTF-8 / 非数值帧产出 <b>BAD 质量 + 明确消息键</b>，
+     * 绝不允许把畸形内容当 GOOD 交付（替代旧的「整帧 {@code byte[]} 直接当值」——那会让
+     * 落库变成 {@code [B@<hash>} 字面文本，曲线/聚合全部不可用且无失败信号）。</p>
+     *
+     * @param address 点位地址
+     * @param payload 帧字节
+     * @return 点位值
+     */
+    private PointValue decode(PointAddress address, byte[] payload) {
+        Instant now = context.clock().instant();
+        switch (payloadFormat) {
+            case NUMBER -> {
+                if (!TcpPayloadFormat.isValidUtf8(payload)) {
+                    return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_UTF8, now);
+                }
+                String text = new String(payload, StandardCharsets.UTF_8).trim();
+                try {
+                    return PointValue.good(address, Double.parseDouble(text), now);
+                } catch (NumberFormatException ex) {
+                    return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_NUMBER, now);
+                }
+            }
+            case TEXT -> {
+                if (!TcpPayloadFormat.isValidUtf8(payload)) {
+                    return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_UTF8, now);
+                }
+                return PointValue.good(address, new String(payload, StandardCharsets.UTF_8), now);
+            }
+            default -> {
+                // BINARY：原样交付字节（默认，向后兼容），宿主自行按业务协议解析
+                return PointValue.good(address, payload.clone(), now);
+            }
+        }
     }
 
     /**

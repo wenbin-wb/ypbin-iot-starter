@@ -72,7 +72,9 @@ public class TcpAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TcpAdapter.class)
     public TcpAdapter iotTcpAdapter(TcpProperties properties, NettyTransport transport) {
-        log.debug("[ypbin-iot] iotTcpAdapter configured.");
-        return new TcpAdapter(transport, properties.toFramingSpec(), properties.idleInterval());
+        log.debug("[ypbin-iot] iotTcpAdapter configured (payload-format={}).",
+                properties.payloadFormat());
+        return new TcpAdapter(transport, properties.toFramingSpec(), properties.idleInterval(),
+                properties.payloadFormat());
     }
 }
