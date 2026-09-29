@@ -8,7 +8,7 @@
     "ypbin-iot-protocol-tcp",
     "ypbin-iot-spring-boot-starter"
   ],
-  "propertyCount": 52,
+  "propertyCount": 53,
   "properties": [
     {
       "name": "ypbin.iot.connection.connect-rate-jitter",
@@ -374,6 +374,14 @@
       "name": "ypbin.iot.protocol.tcp.max-frame-length",
       "type": "java.lang.Integer",
       "description": "单帧最大字节数",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.protocol.tcp.autoconfigure.TcpProperties",
+      "module": "ypbin-iot-protocol-tcp"
+    },
+    {
+      "name": "ypbin.iot.protocol.tcp.payload-format",
+      "type": "cn.ypbin.iot.protocol.tcp.TcpPayloadFormat",
+      "description": "入站载荷解码格式（{@link TcpPayloadFormat}；默认 {@code BINARY}=向后兼容）",
       "defaultValue": null,
       "sourceType": "cn.ypbin.iot.protocol.tcp.autoconfigure.TcpProperties",
       "module": "ypbin-iot-protocol-tcp"
