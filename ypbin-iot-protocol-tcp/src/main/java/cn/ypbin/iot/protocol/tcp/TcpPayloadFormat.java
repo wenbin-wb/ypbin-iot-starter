@@ -20,7 +20,6 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 
 /**
  * TCP 透传入站载荷解码格式（{@code ypbin.iot.protocol.tcp.payload-format}）。
@@ -93,42 +92,5 @@ public enum TcpPayloadFormat {
         } catch (CharacterCodingException ex) {
             return false;
         }
-    }
-
-    /**
-     * 按编码反查格式。
-     *
-     * @param code 编码
-     * @return 格式；未知编码返回 {@code null}
-     */
-    static TcpPayloadFormat fromCode(int code) {
-        for (TcpPayloadFormat format : values()) {
-            if (format.code == code) {
-                return format;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 解析大小写不敏感的名称。
-     *
-     * @param name 名称
-     * @return 格式；未知名称返回 {@code null}
-     */
-    static TcpPayloadFormat fromName(String name) {
-        if (name == null) {
-            return null;
-        }
-        return valueOfSafe(name.toUpperCase(Locale.ROOT));
-    }
-
-    private static TcpPayloadFormat valueOfSafe(String upper) {
-        for (TcpPayloadFormat format : values()) {
-            if (format.name().equals(upper)) {
-                return format;
-            }
-        }
-        return null;
     }
 }
