@@ -122,11 +122,30 @@ public class IotAutoConfiguration {
     @ConditionalOnMissingBean
     public MetricsRecorder iotMetricsRecorder() {
         // 不能用 debug：指标被丢弃是宿主应当知情的事，只在 debug 打一行等于静默降级。
-        // 走到这里说明**没有** MeterRegistry（否则 IotMicrometerAutoConfiguration 会先生效）。
-        log.info("[ypbin-iot] no MeterRegistry found; iotMetricsRecorder falls back to the no-op "
-                + "implementation and metrics are DISCARDED. Add micrometer (e.g. spring-boot-starter-actuator) "
-                + "or provide your own MetricsRecorder bean to collect them.");
+        // 走到这里说明**没有** MeterRegistry bean（否则 IotMicrometerAutoConfiguration 会先生效）。
+        // UP-11：classpath **有** micrometer 却仍未命中 ⇒ 升 WARN + 可执行指引（大概率是装配顺序问题，
+        // 不要自定义 MetricsRecorder 抢 bean——那会让「顺序敏感」这一根因继续存在）。
+        if (isMicrometerOnClasspath()) {
+            log.warn("[ypbin-iot] micrometer 在 classpath 上但没有可用的 MeterRegistry bean —— "
+                    + "iotMetricsRecorder 回退到 no-op，框架指标（read/write/subscription/errors）全部丢弃。"
+                    + "请检查为何 MetricsAutoConfiguration 未生效（如 actuator 依赖缺失/被排除），"
+                    + "或升级 iot-starter 到含 UP-11 修复的版本；不要自定义 MetricsRecorder 抢 bean。");
+        } else {
+            log.info("[ypbin-iot] no MeterRegistry found; iotMetricsRecorder falls back to the no-op "
+                    + "implementation and metrics are DISCARDED. Add micrometer (e.g. spring-boot-starter-actuator) "
+                    + "or provide your own MetricsRecorder bean to collect them.");
+        }
         return NoopMetricsRecorder.INSTANCE;
+    }
+
+    private static boolean isMicrometerOnClasspath() {
+        try {
+            Class.forName("io.micrometer.core.instrument.MeterRegistry", false,
+                    IotAutoConfiguration.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
     }
 
     /**

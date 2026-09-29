@@ -83,7 +83,7 @@ class SourceConventionTest {
     private static final String CONDITIONAL_ON_MISSING_BEAN = "@ConditionalOnMissingBean";
 
     @Test
-    @DisplayName("SRC-01 禁止内联全限定类名（Javadoc 的 {@link FQCN} 豁免）")
+    @DisplayName("SRC-01 禁止内联全限定类名（Javadoc 的 {@link FQCN} 与字符串字面量内的配置类名豁免）")
     void noInlineFullyQualifiedNames() {
         List<String> violations = new ArrayList<>();
         for (Path file : mainJavaFiles()) {
@@ -95,14 +95,32 @@ class SourceConventionTest {
                 }
                 String code = stripJavadocLinks(line);
                 Matcher matcher = INLINE_FQCN.matcher(code);
-                if (matcher.find()) {
+                if (matcher.find() && !withinStringLiteral(line, matcher.start())) {
                     violations.add(REPO_ROOT.relativize(file) + ":" + (index + 1) + " -> " + matcher.group());
                 }
             }
         }
         assertThat(violations)
-                .as("正文禁用内联全限定类名（一律顶部 import）；Javadoc 的 {@link FQCN} 不在此列")
+                .as("正文禁用内联全限定类名（一律顶部 import）；Javadoc 的 {@link FQCN} 与字符串字面量里的配置类名（如 @AutoConfiguration afterName）不在此列")
                 .isEmpty();
+    }
+
+    /**
+     * 全限定名是否位于双引号字符串字面量内（配置类名/断言文本，如
+     * {@code afterName = "org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration"}）。
+     *
+     * @param line  当前行
+     * @param index 匹配起点
+     * @return 匹配点之前双引号为奇数则视为字符串内
+     */
+    private static boolean withinStringLiteral(String line, int index) {
+        int quotes = 0;
+        for (int i = 0; i < index && i < line.length(); i++) {
+            if (line.charAt(i) == '"') {
+                quotes++;
+            }
+        }
+        return quotes % 2 == 1;
     }
 
     @Test

@@ -24,6 +24,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -92,6 +93,20 @@ class IotMicrometerAutoConfigurationTest {
                 .run(context -> assertThat(context.getBean(MetricsRecorder.class))
                         .as("反序装配下若回退成 Noop，说明顺序保证并不来自 before 属性")
                         .isInstanceOf(MicrometerMetricsRecorder.class));
+    }
+
+    @Test
+    @DisplayName("METCFG-05 UP-11：装配注解必须声明「先于 Boot 的 MetricsAutoConfiguration」求值（去掉 afterName 本用例转红）")
+    void orderingMustDeclareAfterBootMetricsAutoConfiguration() {
+        // @ConditionalOnBean(MeterRegistry) 只计数「到此为止已注册的 bean 定义」——
+        // 若本装配早于 Boot 定义 MeterRegistry 的自动配置执行，宿主哪怕有 actuator 也静默回退 Noop（UP-11 根因）。
+        // 该时序无法用 runner 复现（Boot 的 MetricsAutoConfiguration 在 spring-boot-micrometer-metrics 模块），
+        // 改为钉住装配注解本身的声明（变异：删掉 afterName 即转红）。
+        AutoConfiguration annotation =
+                IotMicrometerAutoConfiguration.class.getAnnotation(AutoConfiguration.class);
+        assertThat(annotation.afterName())
+                .as("必须声明在 Boot 的 MetricsAutoConfiguration 之后（字符串声明，避免 Boot 包名编译期耦合）")
+                .contains("org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration");
     }
 
     /**

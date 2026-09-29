@@ -133,6 +133,50 @@ class IotLifecycleTest {
     }
 
     @Test
+    @DisplayName("LIFE-01b UP-2：协议 connect-timeout 配置覆盖「宿主未显式给定」的默认建链超时（死键变活键）")
+    void configuredConnectTimeoutMustOverrideDefaultSpecTimeout() {
+        IotProperties configured = new IotProperties(null, null, null, null, null,
+                Map.of("stub", new IotProperties.ProtocolProperties(true, Duration.ofSeconds(2),
+                        Duration.ofSeconds(5), Duration.ofSeconds(30), null, null, null, null, null,
+                        4096, Map.of())));
+        IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
+                List.of(new StubDeviceRegistry(ValidationResult.ok())),
+                // 宿主 provider 未显式给超时（恰为默认 10s）→ 配置值应生效
+                List.of(new StubSpecProvider(true, ConnectionSpec.DEFAULT_CONNECT_TIMEOUT)),
+                configured, scheduler);
+        try {
+            assertThat(lifecycle.bind(device())).isTrue();
+            assertThat(adapter.lastOpenSpec()).isNotNull();
+            assertThat(adapter.lastOpenSpec().connectTimeout())
+                    .as("ypbin.iot.protocol.stub.connect-timeout=2s 应成为建链超时")
+                    .isEqualTo(Duration.ofSeconds(2));
+        } finally {
+            lifecycle.close();
+        }
+    }
+
+    @Test
+    @DisplayName("LIFE-01c UP-2：宿主显式给了超时（非默认）时尊重宿主，不覆盖")
+    void explicitHostTimeoutMustBeRespected() {
+        IotProperties configured = new IotProperties(null, null, null, null, null,
+                Map.of("stub", new IotProperties.ProtocolProperties(true, Duration.ofSeconds(2),
+                        Duration.ofSeconds(5), Duration.ofSeconds(30), null, null, null, null, null,
+                        4096, Map.of())));
+        IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
+                List.of(new StubDeviceRegistry(ValidationResult.ok())),
+                // 宿主显式给定 7s（≠默认）→ 配置 2s 不得覆盖
+                List.of(new StubSpecProvider(true, Duration.ofSeconds(7))),
+                configured, scheduler);
+        try {
+            assertThat(lifecycle.bind(device())).isTrue();
+            assertThat(adapter.lastOpenSpec().connectTimeout())
+                    .isEqualTo(Duration.ofSeconds(7));
+        } finally {
+            lifecycle.close();
+        }
+    }
+
+    @Test
     @DisplayName("LIFE-02 校验失败必须拒绝接入，且不建立链路")
     void validationFailureMustRejectDevice() {
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
@@ -473,13 +517,24 @@ class IotLifecycleTest {
 
         private final boolean present;
 
+        private final Duration connectTimeout;
+
         private StubSpecProvider(boolean present) {
+            this(present, ConnectionSpec.DEFAULT_CONNECT_TIMEOUT);
+        }
+
+        private StubSpecProvider(boolean present, Duration connectTimeout) {
             this.present = present;
+            this.connectTimeout = connectTimeout;
         }
 
         @Override
         public Optional<ConnectionSpec> find(String connectionId) {
-            return present && CONNECTION_ID.equals(connectionId) ? Optional.of(spec()) : Optional.empty();
+            if (!present || !CONNECTION_ID.equals(connectionId)) {
+                return Optional.empty();
+            }
+            return Optional.of(new ConnectionSpec(CONNECTION_ID, CODE, Endpoint.of("tcp://127.0.0.1:1"),
+                    connectTimeout, Duration.ofSeconds(1), null, null, Map.of()));
         }
     }
 
@@ -500,6 +555,8 @@ class IotLifecycleTest {
 
         private volatile StubConnection lastConnection;
 
+        private volatile ConnectionSpec lastOpenSpec;
+
         private final java.util.concurrent.atomic.AtomicInteger openInvocations =
                 new java.util.concurrent.atomic.AtomicInteger();
 
@@ -507,6 +564,10 @@ class IotLifecycleTest {
 
         private int openInvocations() {
             return openInvocations.get();
+        }
+
+        private ConnectionSpec lastOpenSpec() {
+            return lastOpenSpec;
         }
 
         @Override
@@ -517,6 +578,7 @@ class IotLifecycleTest {
         @Override
         public CompletionStage<ProtocolConnection> open(ConnectionSpec spec, AdapterContext context) {
             openInvocations.incrementAndGet();
+            lastOpenSpec = spec;
             StubConnection connection = new StubConnection(spec.connectionId());
             lastConnection = connection;
             return CompletableFuture.completedFuture(connection);
