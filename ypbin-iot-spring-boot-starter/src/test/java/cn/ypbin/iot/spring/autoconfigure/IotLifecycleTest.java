@@ -314,6 +314,42 @@ class IotLifecycleTest {
         lifecycle.close();
     }
 
+    @Test
+    @DisplayName("LIFE-13 ★ 契约：每次 ADD 都必须先关闭旧会话、再产生新实例（宿主靠它决定重新订阅）")
+    void everyAddMustCloseOldSessionAndRebindNewInstance() {
+        // 为什么把这条钉死：宿主（ypbin-access）的订阅对账以「会话实例是否变化」决定要不要重新订阅
+        // （AccessSubscriptionPlanner 的 subscribedSessions 用 == 比较实例）。此前这条语义只存在于
+        // bind() 的实现细节里、没有任何测试；一旦框架改成复用会话实例，宿主会**静默**退化成
+        // 「改了点位却永不重新订阅」（只有一行 DEBUG 日志）。故这里提升为有测试支撑的行为承诺。
+        StubDeviceRegistry registry = new StubDeviceRegistry(ValidationResult.ok());
+        IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
+                List.of(registry), List.of(new StubSpecProvider(true)), properties, scheduler);
+        lifecycle.onApplicationEvent(null);
+
+        DeviceSession first = lifecycle.sessions().get("d1");
+        assertThat(first).as("启动引导必须已绑定设备").isNotNull();
+
+        // ① 规格变化路径：宿主只重发 ADD（不先发 REMOVE）
+        registry.listener.accept(new DeviceChange(ChangeType.ADD, device(), 2L));
+        DeviceSession afterSpecChange = lifecycle.sessions().get("d1");
+        assertThat(afterSpecChange).as("ADD 后必须换**新实例**（宿主以实例变化决定重新订阅）")
+                .isNotSameAs(first);
+        assertThat(first.state()).as("旧会话必须先被关闭（否则旧订阅与链路引用泄漏）")
+                .isEqualTo(SessionState.CLOSED);
+        assertThat(afterSpecChange.state()).isEqualTo(SessionState.ONLINE);
+        assertThat(lifecycle.sessionCount()).as("同一设备仍只应有一个会话").isEqualTo(1);
+
+        // ② 重领路径：REMOVE 后再 ADD（宿主的 fence → 重新领取）
+        registry.listener.accept(new DeviceChange(ChangeType.REMOVE, device(), 3L));
+        assertThat(lifecycle.sessionCount()).as("REMOVE 必须解绑设备").isZero();
+        registry.listener.accept(new DeviceChange(ChangeType.ADD, device(), 4L));
+        DeviceSession afterReacquire = lifecycle.sessions().get("d1");
+        assertThat(afterReacquire).as("REMOVE→ADD 同样必须产生新实例").isNotSameAs(afterSpecChange);
+        assertThat(afterReacquire.state()).isEqualTo(SessionState.ONLINE);
+        assertThat(lifecycle.sessionCount()).isEqualTo(1);
+        lifecycle.close();
+    }
+
 
     @Test
     @DisplayName("LIFE-12 链路意外关闭必须自动重连并重新绑定设备")

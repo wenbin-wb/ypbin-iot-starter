@@ -3,9 +3,19 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)：`主版本.次版本.修订号`。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-当前开发版：`0.2.0-SNAPSHOT`。
+当前开发版：`0.2.1-SNAPSHOT`。
 
 已发布：**`0.1.0`（2026-09-21，Maven Central）**——首个正式版，由 `ypbin-access` 作为首个真实宿主接入验证。
+
+## [未发布]
+
+### 新增
+
+- **契约显式化：同一设备每次 ADD 都产生新的 `DeviceSession` 实例、且旧会话先被关闭**
+  （`IotLifecycleTest#everyAddMustCloseOldSessionAndRebindNewInstance`，LIFE-13）。
+  宿主 `ypbin-access` 的订阅对账以「会话实例是否变化」决定要不要重新订阅（`subscribedSessions` 用 `==` 比较），
+  此前这条语义只存在于 `bind()` 的实现细节、无测试覆盖；现提升为**有测试支撑的行为承诺**（见 `CONTRACT.md` §四 第 7 条），
+  防止「改为复用会话实例」导致宿主静默退化成「改了点位却永不重新订阅」。
 
 ## [0.2.0] - 2026-09-29
 

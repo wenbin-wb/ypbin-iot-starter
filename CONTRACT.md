@@ -45,6 +45,11 @@
    指数退避重连并重绑定其上设备；**可重复生效**（不是只生效一次）；
    显式关闭与设备 REMOVE 取消重连；全程有日志与计数。
 6. **进程停机时不静默丢在途回调**：投递器关闭时有界等待在途宿主回调。
+7. **每次 ADD 都换新的 `DeviceSession` 实例、且旧会话先被关闭**：`onDeviceChange(ADD)`（含规格变化，
+   宿主只重发 ADD）与 `REMOVE → ADD` 两条路径都会先 `detach()`（`session.close()` + 从会话表移除）
+   再由适配器 `bind()` 产生**新实例**。宿主**依赖**这条语义做订阅对账（`ypbin-access` 的
+   `AccessSubscriptionPlanner` 以「实例是否相同」判断要不要重新订阅）⇒ 不得改为复用实例。
+   测试：`IotLifecycleTest#everyAddMustCloseOldSessionAndRebindNewInstance`（LIFE-13）。
 
 ## 五、明确不做的（有意为之，不是缺陷）
 
