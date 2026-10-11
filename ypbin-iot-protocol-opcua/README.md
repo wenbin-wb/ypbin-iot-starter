@@ -90,8 +90,13 @@ ns=0（标准类型）还是 ns=2（厂商模型）。猜错的表现是「解�
 5. **`ExpandedNodeId.toNodeId(...)` 必须传命名空间表**：无参重载不存在。
 6. **不要覆盖基类已实现的方法**：`ManagedAddressSpace` 已实现 `read`/`write`/`browse`，覆盖成空实现会静默失效。
 7. **安全默认是明文**：默认 `SecurityPolicy#None`（现场大量旧设备只支持明文）。
-   **生产环境必须显式配置签名/加密策略**——但注意本版本**尚未实现**非 None 策略，配置后会 fail-fast 而不是静默明文。
-8. **认证尚未实现**：当前是匿名连接。需要用户名/密码或证书的服务器连不上，且没有对应配置项。
+   **生产环境必须显式配置签名/加密策略**（`security-policy` + `security-mode`）；
+   非 None 策略需同时提供客户端证书（`client-key-store`）与信任目录（`trust-list-dir`）。
+   缺失必要材料时**配置期即 fail-fast**，不会静默退回明文。
+8. **认证已实现，但凭据必须走加密通道**：支持用户名密码（`username` + `credential-ref`，口令经
+   `CredentialResolver` 注入、不落配置文件）与客户端证书（`client-key-store` / `trust-list-dir`）。
+   在 `SecurityPolicy#None` 下配置凭据会被**显式拒绝**（`iot.opcua.credentials.need-security`），
+   因为该策略下凭据是明文传输——拒绝而不是静默明文发送。
 
 ---
 
@@ -99,9 +104,9 @@ ns=0（标准类型）还是 ns=2（厂商模型）。猜错的表现是「解�
 
 | 项 | 说明 |
 |---|---|
-| **原生订阅的推送路径未验证** | 订阅创建与取消已验证；但「服务端改值 → 推送」需要测试 harness 通过 Milo 的 `AttributeService` 驱动值变更，当前 harness 用 `UaVariableNode.setValue` 不足以触发上报。`OpcUaAdapterTckTest#nativeSubscriptionMustReceivePush` 以 `Assumptions.abort` **显式标记为未验证**（不是静默跳过）。 |
-| 非 None 安全策略 | 未实现（含签名/加密与证书管理），配置后 fail-fast |
-| 认证 | 匿名连接；用户名/密码、X.509 用户证书均未实现 |
+| **原生订阅的推送路径** | 已在 `OpcUaSecuredSessionTest` 及 TCK 中覆盖（见 `docs/PROTOCOLS.md` §7） |
+| 非 None 安全策略 | **已实现并端到端验证**：`Basic256Sha256 + SignAndEncrypt` 完成签名加密会话并成功读取（`SEC-E2E-01`） |
+| 认证 | **已实现**：用户名密码令牌（`SEC-E2E-02`，含错误口令被拒的反向用例 `SEC-E2E-03`）与客户端证书（`client-key-store` / `trust-list-dir`） |
 | 方法调用（Method）与事件订阅 | 未实现（`EVENT` 能力未声明）|
 
 ---

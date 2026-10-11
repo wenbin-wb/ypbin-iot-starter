@@ -45,7 +45,7 @@
 |---|---|
 | [`README.md`](./README.md) | 定位、模块总览、核心设计决策 |
 | [`docs/DESIGN.md`](./docs/DESIGN.md) | 模块划分与依赖图、条件装配策略、并发关键技术、风险与 ADR、**§1.4 与母仓规范的显式对齐** |
-| [`docs/SPI.md`](./docs/SPI.md) | `ProtocolAdapter` / `AdapterContext` 及全部配套类型；**§0.1 代码级约定 C1~C10** |
+| [`docs/SPI.md`](./docs/SPI.md) | `ProtocolAdapter` / `AdapterContext` 及全部配套类型；**§0.1 代码级约定 C1~C11** |
 | [`docs/PROTOCOLS.md`](./docs/PROTOCOLS.md) | 各协议选型（坐标/版本/许可证/坑）、许可证门禁、pinning 分级、MVP 路线图 |
 | [`docs/RUNTIME.md`](./docs/RUNTIME.md) | 设备影子、时钟同步、配置热更新、i18n、版本兼容、限流熔断、模拟器、优雅停机、测试策略 |
 
@@ -179,7 +179,7 @@ iot-core                 零 Spring · 零 Netty（仅 JDK 21 + slf4j-api + jspe
 
 - [ ] 新引入的依赖**已核对 POM 的 license 字段**（不采信 README/博客）
 - [ ] 传递依赖已审查并按需 `<exclusions>` 裁剪（如 `lunasaw:sip-*` 的 Spring Cache / SkyWalking / Guava）
-- [ ] 引入 GPL/LGPL/MPL 类库时，模块 README 已含许可边界声明，且 `LICENSE-RISK.md` 已自动更新（**不阻断构建**，但必须记录）
+- [ ] 引入 GPL/LGPL/MPL 类库时，模块 README 已含许可边界声明，并在 `docs/PROTOCOLS.md` §5.1 许可证总表中登记（**不阻断构建**，但必须记录；本仓暂无自动生成的 `LICENSE-RISK.md`）
 - [ ] 新增协议前确认它**能免硬件验证**（`PROTOCOLS.md` §7.5 矩阵）——表里没有验证手段就不开始写
 
 ### 4.8 测试
@@ -243,7 +243,7 @@ mvn spotless:apply
 
 | 陷阱 | 现象 | 正确做法 |
 |---|---|---|
-| `AutoConfiguration.imports` 未登记 | 模块引入后**静默不装配**，无任何报错 | 新增装配类必须同步登记；`RegistrationDiscoveryTest` 做运行时可见性断言 |
+| `AutoConfiguration.imports` 未登记 | 模块引入后**静默不装配**，无任何报错 | 新增装配类必须同步登记；由 `SourceConventionTest`（源码级 SRC-04）与 `IotAutoConfigurationTest`（装配可见性）共同守门 |
 | `EnvironmentPostProcessor` 注册键未随接口改包 | Boot 4.1 仍兼容旧键，**默认值静默失效** | 接口与 `spring.factories` 键**同步**改为 `org.springframework.boot.EnvironmentPostProcessor` |
 | Milo 用旧坐标 `sdk-client` | 拿到冻结在 `0.6.16` 的版本 | 用 `milo-sdk-client:1.1.7` 等新坐标 |
 | PLC4X 用 `plc4j-driver-ethernet-ip` | 停在 `0.6.0`（2020） | 用 `plc4j-driver-eip:1.0.0` |
@@ -260,8 +260,8 @@ mvn spotless:apply
 
 | 主题 | 位置 |
 |---|---|
-| 条件装配策略与铁律 A1~A18 | `docs/DESIGN.md` §3.3 / §3.4 |
-| SPI 代码级约定 C1~C10 | `docs/SPI.md` §0.1 |
+| 条件装配策略与铁律 A1~A18 | `docs/DESIGN.md` §3.4 |
+| SPI 代码级约定 C1~C11 | `docs/SPI.md` §0.1 |
 | 许可证管理（记录而非阻断） | `docs/PROTOCOLS.md` §5.2 |
 | pinning 风险分级与落地规则 | `docs/PROTOCOLS.md` §5.5 |
 | 内核与 JVM 参数基线 | `docs/DESIGN.md` §5.10 |
