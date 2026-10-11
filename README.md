@@ -205,7 +205,7 @@ ypbin:
 |---|---|
 | [`AGENTS.md`](./AGENTS.md) | 本仓开发规范：分层、编码铁律、AI 审查清单、常见陷阱 |
 | [总体设计](./docs/DESIGN.md) | 模块划分与依赖图、条件装配策略、千万级并发关键技术、技术风险与应对、ADR、**与母仓规范的显式对齐** |
-| [SPI 契约](./docs/SPI.md) | `ProtocolAdapter`、`AdapterContext` 及全部配套类型的接口签名与 Javadoc、**代码级约定 C1~C10** |
+| [SPI 契约](./docs/SPI.md) | `ProtocolAdapter`、`AdapterContext` 及全部配套类型的接口签名与 Javadoc、**代码级约定 C1~C11** |
 | [协议选型与路线图](./docs/PROTOCOLS.md) | 各协议库选型（坐标/版本/许可证/坑）、许可证三档门禁、pinning 风险分级、MVP 路线图 |
 | [运行时与运维设计](./docs/RUNTIME.md) | 设备影子、时钟同步、配置热更新、i18n、版本兼容矩阵、限流熔断、协议模拟器、优雅停机、测试策略 |
 | [调研存档](./docs/research/) | 选型版本号的一手来源依据（可追溯） |

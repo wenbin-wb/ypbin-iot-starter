@@ -194,7 +194,7 @@ admin 侧接入本仓时，除实现 `DeviceRegistry` / `DataSink` 外，必须�
 | `ypbin-iot-core` | SPI 契约、值对象、异常体系。**零 Spring、零 Netty** | JDK 21 · slf4j-api · jspecify | ✅ |
 | `ypbin-iot-transport` | Netty 4.1 传输底座：TCP/UDP/串口/WebSocket 的连接工厂、编解码基座、空闲检测、流量整形 | core · netty-* ·（epoll native 可选） | ✅ |
 | `ypbin-iot-runtime` | 运行时内核：适配器注册中心、连接注册中心、会话管理、重连退避、分层时间轮调度、微批出口 | core（**不含 Netty / Spring**） | ✅ |
-| `ypbin-iot-spring-boot-starter` | Spring 装配层：条件装配、`ypbin.iot.*` 配置、Actuator 端点、健康指示器、生命周期编排；指标默认无操作（**Micrometer 桥未实现**，宿主自行提供 `MetricsRecorder`）| runtime · transport · spring-boot-autoconfigure | ✅ |
+| `ypbin-iot-spring-boot-starter` | Spring 装配层：条件装配、`ypbin.iot.*` 配置、Actuator 端点、健康指示器、生命周期编排；**Micrometer 指标桥已实现**（`IotMicrometerAutoConfiguration` + `MicrometerMetricsRecorder`：宿主提供 `MeterRegistry` 时自动生效，否则回退无操作并打 INFO）| runtime · transport · spring-boot-autoconfigure | ✅ |
 
 #### 协议模块（21）
 
@@ -533,7 +533,7 @@ public class ModbusAutoConfiguration {
 cn.ypbin.iot.protocol.modbus.autoconfigure.ModbusAutoConfiguration
 ```
 
-### 3.4 关键装配规则（十五条铁律，纳入 ArchUnit 门禁）
+### 3.4 关键装配规则（十八条铁律 A1~A18，纳入 ArchUnit 门禁）
 
 | # | 规则 | 理由 |
 |---|---|---|
@@ -576,8 +576,9 @@ cn.ypbin.iot.protocol.modbus.autoconfigure.ModbusAutoConfiguration
 > [Creating Your Own Auto-configuration](https://docs.spring.io/spring-boot/reference/features/developing-auto-configuration.html)——
 > 自动配置**只能**通过 imports 文件加载，且**绝不能**成为组件扫描的目标；
 > 需要排序时用 `@AutoConfiguration(before/after)`；替换类用 `AutoConfiguration.replacements` 声明。
-> 本仓的 `RegistrationDiscoveryTest` 用 `ImportCandidates.load(AutoConfiguration.class, ...)`
-> 做**运行时可见性**断言——源码扫描只能证明「键写对了」，加载一遍才能证明「Boot 真的找得到」。
+> 本仓由 `SourceConventionTest`（SRC-04）做**源码级**登记校验（`@AutoConfiguration` 必须写进
+> `AutoConfiguration.imports`），并由 `IotAutoConfigurationTest`（CFG-08，`SpringFactoriesLoader`）
+> 做**加载一遍**的可见性断言——源码扫描只能证明「键写对了」，加载一遍才能证明「Boot 真的找得到」。
 
 ### 3.5 设备实例的运行时装配
 

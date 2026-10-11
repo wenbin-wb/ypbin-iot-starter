@@ -1,8 +1,9 @@
 # 发布指南
 
-> **当前状态：`0.1.0-SNAPSHOT` 从未发布。** 本文件是**待执行**的发布流程。
+> **当前状态：开发版 `0.2.1-SNAPSHOT`；已发布 `0.1.0`（2026-09-21）与 `0.2.0`（2026-09-29）。**
+> 本文件描述的是**每次发布**的流程。
 > 发布插件（central-publishing / GPG）**已配置**在根 pom 的 `release` profile，
-> 但 **secrets 与首个正式版本号还没配**——见下方「一、发布前置」。
+> 但 **Central 凭据与 GPG 私钥 secrets 还没配全**——见下方「一、发布前置」。
 
 ## 一、发布前置
 
@@ -12,7 +13,7 @@
 | 非发布模块隔离 | ✅ | `ypbin-iot-architecture-tests` 与 `ypbin-iot-integration-tests` 由 `dev-only` profile 承载；**已实测**：`-Prelease` 的反应堆为 12 个项目、两者均不在其中。该不变量由 `ModulePublishingTest` 与 `release.yml` 双重守着 |
 | GPG 签名 + `central-publishing-maven-plugin` | ✅ 已配置 | 在根 pom 的 `release` profile（母仓的发布配置在其**根 pom**，不在已发布的父 pom，故本仓需独立声明）|
 | Central 凭据与 GPG 私钥 | ⬜ **需配置** | GitHub 仓库 secrets：`MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` / `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE`；并创建 `release` environment |
-| 首个正式版本 | ⬜ **刻意暂缓** | `<revision>` 目前是 `0.1.0-SNAPSHOT`。**尚未在真实项目中验证过**，因此不发布；待有真实接入验证后再改 `0.1.0` |
+| 首个正式版本 | ✅ **已发布** | `0.1.0`（2026-09-21）与 `0.2.0`（2026-09-29）均已发布到 Maven Central，首个真实宿主为 `ypbin-access`。`<revision>` 现为下一开发版 `0.2.1-SNAPSHOT` |
 | 仓库可见性 | 私有 | 徽章只对已登录用户可见；转公开后自动生效 |
 
 > 发布工作流默认是 `dry-run`（只做前置校验与打包，不签名不上传）——
