@@ -73,8 +73,17 @@ public final class TcpAdapter implements ProtocolAdapter {
     /** 载荷无法解析为数值（payload-format=number 时）的消息键。 */
     public static final String MSG_PAYLOAD_NOT_NUMBER = "iot.tcp.payload.not-number";
 
-    /** 订阅地址超过 1 个（TCP 是单点位透传流）的消息键。 */
+    /** 订阅地址超过 1 个（非 KEY_VALUE 格式的 TCP 是单点位透传流）的消息键。 */
     public static final String MSG_MULTI_ADDRESS_UNSUPPORTED = "iot.tcp.subscribe.multi-address-unsupported";
+
+    /** 帧不是 KEY=VALUE 键值格式（payload-format=key-value 时）的消息键。 */
+    public static final String MSG_PAYLOAD_NOT_KEY_VALUE = "iot.tcp.payload.not-key-value";
+
+    /** 帧内找不到 selector 对应字段的消息键（仅该点位 BAD，不静默丢弃）。 */
+    public static final String MSG_SELECTOR_NOT_FOUND = "iot.tcp.selector.not-found";
+
+    /** 帧内 selector 对应字段值为空的消息键。 */
+    public static final String MSG_SELECTOR_VALUE_EMPTY = "iot.tcp.selector.value-empty";
 
     private static final ProtocolDescriptor DESCRIPTOR = ProtocolDescriptor.builder()
             .code(PROTOCOL_CODE)
@@ -84,7 +93,7 @@ public final class TcpAdapter implements ProtocolAdapter {
             .capabilities(ProtocolCapability.WRITE, ProtocolCapability.SUBSCRIBE_STREAM)
             .runtimeVersionRange("0.1.0", "1.0.0")
             .attribute("defaultPort", "0")
-            .attribute("payloadFormat", "binary|text|number")
+            .attribute("payloadFormat", "binary|text|number|key-value")
             .build();
 
     private final NettyTransport transport;

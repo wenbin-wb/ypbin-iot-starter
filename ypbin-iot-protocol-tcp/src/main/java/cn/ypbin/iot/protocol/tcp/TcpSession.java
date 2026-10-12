@@ -17,6 +17,7 @@ package cn.ypbin.iot.protocol.tcp;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.LogLevel;
+import cn.ypbin.iot.core.exception.AddressParseException;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.DataBatch;
 import cn.ypbin.iot.core.model.DataListener;
@@ -73,13 +74,18 @@ import org.slf4j.LoggerFactory;
  * （即调用方给出的订阅地址），{@code value} 按 {@link TcpPayloadFormat} 解码
  * （默认 {@code binary}：原样交付 {@code byte[]}；{@code text}/{@code number} 见下方载荷解码节）。</p>
  *
- * <p><b>单点位契约（UP-4）</b>：裸 TCP 帧没有寻址语义，一次订阅只接受 <b>1 个地址</b>
- * （{@code subscribe()} 对多地址 <b>fail-fast</b>——拒绝在「声称订阅了 N 个点位」的同时静默只交付 1 个）；
- * 一帧可寻址多点位的 valueSelector 语义为后续演进项。</p>
+ * <p><b>单点位契约（UP-4）与 valueSelector 演进</b>：裸 TCP 帧默认没有寻址语义，因此
+ * {@code payload-format=binary|text|number} 时一次订阅只接受 <b>1 个地址</b>
+ * （{@code subscribe()} 对多地址 <b>fail-fast</b>——拒绝在「声称订阅了 N 个点位」的同时静默只交付 1 个）。
+ * 配置 {@code payload-format=key-value} 后，订阅地址（{@code PointAddress.raw}）被解释为帧内
+ * {@code KEY=VALUE} 字段的 selector，同一帧可服务多个点位；selector 语法非法在订阅期 fail-fast，
+ * 运行时 selector 未命中只让该点位产出 BAD，绝不静默丢弃。语义与失败矩阵见
+ * {@code docs/TCP-VALUE-SELECTOR.md}。</p>
  *
  * <p><b>载荷解码（UP-3）</b>：入站帧按 {@code ypbin.iot.protocol.tcp.payload-format} 解码——
  * {@code binary}（默认，原样交付 {@code byte[]}，向后兼容）/ {@code text}（严格 UTF-8）/
- * {@code number}（数值）；解码失败产出 <b>BAD 质量 + 明确消息键</b>，不把畸形内容当 GOOD 交付。</p>
+ * {@code number}（数值）/ {@code key-value}（键值帧按 selector 取字段）；解码失败产出
+ * <b>BAD 质量 + 明确消息键</b>，不把畸形内容当 GOOD 交付。</p>
  *
  * @author wenbin
  * @since 2026-09-13
@@ -231,20 +237,27 @@ public final class TcpSession implements DeviceSession {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("session already closed: " + sessionId));
         }
-        // UP-4（B 方案）：TCP 透传是「单点位流」——裸 TCP 帧没有寻址语义，无法把一帧派发到 0..N-1 个点位。
-        // 此前只取第 0 个地址、其余点位静默无数据（且 subscribe() 返回的句柄仍声称含全部 N 个地址）。
-        // fail-fast：订阅多于 1 个地址直接拒绝，绝不在「声称订阅了 N 个点位」的同时静默只交付 1 个。
-        // （一帧可寻址多点位的 valueSelector 语义为后续演进项，见 issue #15 期望 A。）
-        if (request.addresses().size() > 1) {
+        // UP-4（B 方案）在 payload-format=key-value 时演进为「selector 多点位流」：
+        // 订阅地址是帧内字段键，同一帧可派发到 N 个点位。selector 语法非法必须在订阅期 fail-fast。
+        // 非 key-value 格式仍保持「单点位流」：裸 TCP 帧没有寻址语义，多地址直接拒绝，
+        // 绝不在「声称订阅了 N 个点位」的同时静默只交付 1 个。
+        if (payloadFormat == TcpPayloadFormat.KEY_VALUE) {
+            for (PointAddress address : request.addresses()) {
+                try {
+                    TcpValueSelector.validateSelector(address);
+                } catch (AddressParseException ex) {
+                    return CompletableFuture.failedFuture(ex);
+                }
+            }
+        } else if (request.addresses().size() > 1) {
             return CompletableFuture.failedFuture(new IllegalArgumentException(
                     TcpAdapter.MSG_MULTI_ADDRESS_UNSUPPORTED
-                            + ": tcp 透传为单点位流，一次订阅仅支持 1 个地址，收到 "
+                            + ": 非 key-value 的 tcp 透传为单点位流，一次订阅仅支持 1 个地址，收到 "
                             + request.addresses().size() + " 个"));
         }
         String subscriptionId = "tcp-" + subscriptionSequence.incrementAndGet();
-        PointAddress streamAddress = request.addresses().get(0);
         TcpSubscription subscription = new TcpSubscription(subscriptionId, request.addresses(), listener);
-        Consumer<byte[]> frameConsumer = payload -> dispatch(subscription, streamAddress, payload);
+        Consumer<byte[]> frameConsumer = payload -> dispatch(subscription, payload);
         subscription.attach(frameConsumer);
         connection.addFrameListener(frameConsumer);
         subscriptions.put(subscriptionId, subscription);
@@ -314,59 +327,65 @@ public final class TcpSession implements DeviceSession {
         return CompletableFuture.completedFuture(null);
     }
 
-    private void dispatch(TcpSubscription subscription, PointAddress address, byte[] payload) {
+    private void dispatch(TcpSubscription subscription, byte[] payload) {
         if (!subscription.active()) {
             return;
         }
-        PointValue value = decode(address, payload);
-        subscription.incrementDelivered();
-        context.metrics().recordSubscriptionBatch(1);
+        List<PointValue> values = decodeAll(subscription.addresses(), payload);
+        subscription.incrementDelivered(values.size());
+        context.metrics().recordSubscriptionBatch(values.size());
         DataListener listener = subscription.listener();
         if (listener != null) {
-            // 本方法运行在 Netty EventLoop 上：必须经投递器卸载宿主代码（I4）
-            context.delivery().dispatch(() -> listener.onData(value));
+            // 本方法运行在 Netty EventLoop 上：必须经投递器卸载宿主代码（I4）。
+            // 逐点位投递：一个点位回调抛异常不得吞掉同帧其余点位（与 MQTT/OPC UA 一致）。
+            for (PointValue value : values) {
+                context.delivery().dispatch(() -> listener.onData(value));
+            }
             return;
         }
         context.egress().emit(new DataBatch(device.deviceId(), device.protocol(),
-                connection.connectionId(), context.clock().instant(), List.of(value)));
+                connection.connectionId(), context.clock().instant(), values));
     }
 
     /**
-     * 按配置的 {@link TcpPayloadFormat} 解码入站帧为 {@link PointValue}。
+     * 按配置的 {@link TcpPayloadFormat} 解码入站帧为点位值列表。
      *
-     * <p><b>解码失败显式可见（UP-3）</b>：非 UTF-8 / 非数值帧产出 <b>BAD 质量 + 明确消息键</b>，
-     * 绝不允许把畸形内容当 GOOD 交付（替代旧的「整帧 {@code byte[]} 直接当值」——那会让
-     * 落库变成 {@code [B@<hash>} 字面文本，曲线/聚合全部不可用且无失败信号）。</p>
+     * <p><b>解码失败显式可见（UP-3）</b>：非 UTF-8 / 非数值 / 非 key-value 帧产出
+     * <b>BAD 质量 + 明确消息键</b>，绝不允许把畸形内容当 GOOD 交付（替代旧的「整帧
+     * {@code byte[]} 直接当值」——那会让落库变成 {@code [B@<hash>} 字面文本，
+     * 曲线/聚合全部不可用且无失败信号）。</p>
      *
-     * @param address 点位地址
-     * @param payload 帧字节
-     * @return 点位值
+     * @param addresses 本次订阅的全部地址
+     * @param payload   帧字节
+     * @return 与 {@code addresses} 等长的点位值列表
      */
-    private PointValue decode(PointAddress address, byte[] payload) {
+    private List<PointValue> decodeAll(List<PointAddress> addresses, byte[] payload) {
         Instant now = context.clock().instant();
-        switch (payloadFormat) {
-            case NUMBER -> {
-                if (!TcpPayloadFormat.isValidUtf8(payload)) {
-                    return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_UTF8, now);
-                }
-                String text = new String(payload, StandardCharsets.UTF_8).trim();
-                try {
-                    return PointValue.good(address, Double.parseDouble(text), now);
-                } catch (NumberFormatException ex) {
-                    return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_NUMBER, now);
-                }
-            }
-            case TEXT -> {
-                if (!TcpPayloadFormat.isValidUtf8(payload)) {
-                    return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_UTF8, now);
-                }
-                return PointValue.good(address, new String(payload, StandardCharsets.UTF_8), now);
-            }
-            default -> {
-                // BINARY：原样交付字节（默认，向后兼容），宿主自行按业务协议解析
-                return PointValue.good(address, payload.clone(), now);
-            }
+        return switch (payloadFormat) {
+            case NUMBER -> List.of(decodeNumber(addresses.get(0), payload, now));
+            case TEXT -> List.of(decodeText(addresses.get(0), payload, now));
+            case KEY_VALUE -> TcpValueSelector.select(addresses, payload, now);
+            case BINARY -> List.of(PointValue.good(addresses.get(0), payload.clone(), now));
+        };
+    }
+
+    private PointValue decodeNumber(PointAddress address, byte[] payload, Instant now) {
+        if (!TcpPayloadFormat.isValidUtf8(payload)) {
+            return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_UTF8, now);
         }
+        String text = new String(payload, StandardCharsets.UTF_8).trim();
+        try {
+            return PointValue.good(address, Double.parseDouble(text), now);
+        } catch (NumberFormatException ex) {
+            return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_NUMBER, now);
+        }
+    }
+
+    private PointValue decodeText(PointAddress address, byte[] payload, Instant now) {
+        if (!TcpPayloadFormat.isValidUtf8(payload)) {
+            return PointValue.bad(address, Quality.BAD, TcpAdapter.MSG_PAYLOAD_NOT_UTF8, now);
+        }
+        return PointValue.good(address, new String(payload, StandardCharsets.UTF_8), now);
     }
 
     /**
@@ -408,8 +427,8 @@ public final class TcpSession implements DeviceSession {
             return listener;
         }
 
-        private void incrementDelivered() {
-            delivered.incrementAndGet();
+        private void incrementDelivered(int pointCount) {
+            delivered.addAndGet(pointCount);
         }
 
         private void cancel() {

@@ -393,6 +393,17 @@ ypbin-iot-protocol-modbus/
 而不是「协议实现不能是 Spring starter」——后者会直接摧毁「引入即装配」这条更重要的能力。
 用构建期约束（ArchUnit）保证 `protocol/` 子包不出现任何 Spring 类型，两边目标同时达成。
 
+### 2.6 TCP 透传的帧内字段选择（valueSelector）
+
+`ypbin-iot-protocol-tcp` 在 `payload-format=key-value` 时把 `PointAddress.raw` 解释为
+`KEY=VALUE` 键值帧的字段 selector，使一次订阅可包含多个地址、同一帧可服务多个点位；
+selector 语法非法在订阅期 fail-fast，运行期未命中只让该点位产出 BAD，不静默丢弃、也不
+把整帧当 GOOD 交付。其他格式（`binary`/`text`/`number`）保持单点位语义不变。
+
+该设计遵循 P2（core 只透传 `raw`，解释权归协议模块）与 P3（未支持/非法组合显式拒绝）。
+完整语义表、失败矩阵、`raw_address` 角色与迁移指引见
+[`docs/TCP-VALUE-SELECTOR.md`](./TCP-VALUE-SELECTOR.md)，行为承诺见 `CONTRACT.md` §四 第 8 条。
+
 ---
 
 ## 3. 自动配置的条件装配策略
