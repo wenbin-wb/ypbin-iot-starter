@@ -5,7 +5,8 @@
 
 当前开发版：`0.2.1-SNAPSHOT`。
 
-已发布：**`0.1.0`（2026-09-21，Maven Central）**——首个正式版，由 `ypbin-access` 作为首个真实宿主接入验证。
+已发布：**`0.1.0`（2026-09-21）** 与 **`0.2.0`（2026-09-29）**，均已发布到 Maven Central；
+其中 `0.1.0` 由 `ypbin-access` 作为首个真实宿主接入验证。
 
 ## [未发布]
 
@@ -16,6 +17,21 @@
   宿主 `ypbin-access` 的订阅对账以「会话实例是否变化」决定要不要重新订阅（`subscribedSessions` 用 `==` 比较），
   此前这条语义只存在于 `bind()` 的实现细节、无测试覆盖；现提升为**有测试支撑的行为承诺**（见 `CONTRACT.md` §四 第 7 条），
   防止「改为复用会话实例」导致宿主静默退化成「改了点位却永不重新订阅」。
+
+- **TCP 透传支持 `payload-format=key-value` 的帧内字段选择（valueSelector，#15 期望 A）**：
+  订阅地址（`PointAddress.raw`）被解释为 `KEY=VALUE` 键值帧的字段 selector，一次订阅可含多个
+  地址，同一帧为各点位分别产出 `PointValue`（值为 `String`，类型转换仍归宿主物模型）。
+  原「多地址 fail-fast」约束仅在非 `key-value` 格式保留；`key-value` 下 selector 语法非法在
+  订阅期 `AddressParseException` fail-fast，运行期未命中只让该点位 BAD
+  （`iot.tcp.selector.not-found`），不静默丢弃、不把整帧当 GOOD；帧非 UTF-8 / 无键值字段时
+  全部点位 BAD。语义、失败矩阵、`raw_address` 角色与迁移指引见
+  [`docs/TCP-VALUE-SELECTOR.md`](docs/TCP-VALUE-SELECTOR.md)，行为承诺见 `CONTRACT.md` §四 第 8 条。
+  **边界**：只支持扁平 `KEY=VALUE`，不支持 JSONPath/嵌套/引号转义/逐点位分隔符；不做数值类型转换。
+
+### 构建
+
+- 根 POM parent 由 `ypbin-starter-dependencies` `3.6.0` 升级到 **`3.8.0`**，与母仓最新发布基线对齐；
+  离线 `mvn -o -DskipTests compile` 与 `mvn -o test` 均通过（Central 制品已在本地解析）。
 
 ## [0.2.0] - 2026-09-29
 

@@ -51,6 +51,17 @@
    再由适配器 `bind()` 产生**新实例**。宿主**依赖**这条语义做订阅对账（`ypbin-access` 的
    `AccessSubscriptionPlanner` 以「实例是否相同」判断要不要重新订阅）⇒ 不得改为复用实例。
    测试：`IotLifecycleTest#everyAddMustCloseOldSessionAndRebindNewInstance`（LIFE-13）。
+8. **TCP 键值帧一帧多点位（`payload-format=key-value`）**：`PointAddress.raw` 被解释为
+   `KEY=VALUE` 帧的字段 selector；`subscribe()` 允许一次订阅多个 selector，同一帧为每个
+   地址各自产出一个 `PointValue`（值类型为 `String`，不做物模型类型转换）。
+   selector 语法非法（含 `=`、`,`、`;`、换行）在订阅期以 `AddressParseException` fail-fast；
+   运行期 selector 未命中只让该点位产出 BAD（`iot.tcp.selector.not-found`），
+   同帧其他点位照常交付，不静默丢弃；整帧非 UTF-8 / 无键值字段时全部点位 BAD。
+   非 `key-value` 格式仍保持「单点位流」多地址 fail-fast。
+   完整语义见 [`docs/TCP-VALUE-SELECTOR.md`](./docs/TCP-VALUE-SELECTOR.md)；
+   测试：`TcpSessionBehaviourTest#keyValueFrameMustServeMultiplePoints`（TCP-12）、
+   `#missingSelectorMustYieldBadPointOnly`（TCP-13）、`#invalidSelectorMustFailFastOnSubscribe`（TCP-14）、
+   `#subscribeWithMultipleAddressesMustFailFast`（TCP-11，非 key-value 回归）。
 
 ## 五、明确不做的（有意为之，不是缺陷）
 

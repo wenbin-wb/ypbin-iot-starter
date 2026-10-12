@@ -32,8 +32,8 @@
     早期用的 `-Dsurefire.skip=true` 在本项目**不生效**（CI 日志里 11 个模块的 surefire 全跑），
     现已改为声明式配置，并由 CI 断言守着「surefire 不得出现用例记录」。
 - ✅ NullAway（`-Pnullaway` + `@NullMarked`）覆盖全部 8 个模块（0 违规，含执行自检）
-  - ✅ 父版本钉 **`3.1.0`（已发布正式版）**：拿到 `nullaway` / `dep-convergence` 两个 profile，
-    同时干净环境可直接构建（2.2.3 没有这些 profile）
+  - ✅ 父版本钉 **`3.8.0`（已发布正式版，Central 可解析；随母仓基线升级）**：
+    拿到 `nullaway` / `dep-convergence` 两个 profile，同时干净环境可直接构建（2.2.3 没有这些 profile）
   - ✅ 全 8 模块完成（core 40 / starter 10 / runtime 8 / tcp 8 / opcua 8 / transport 4 /
     modbus 2 / mqtt 2 处，全部按语义修，无一处 `@SuppressWarnings` 压制）
   - ✅ 依赖版本收敛（`-Pdep-convergence`，随父版本一并获得）
@@ -46,11 +46,12 @@
 - ✅ `tools/`：`check-nullaway.sh`（含执行自检）、`export-config-metadata.mjs`（聚合 + 漂移门禁 +
   **模块集合不得静默缩小**）、`export-coverage.mjs`（覆盖率快照，由构建产物生成）、`preflight.sh`（发布前总检，8 步含集成测试）
 - ✅ 发布前置：GPG + `central-publishing-maven-plugin`（在根 pom 的 release profile；`-Prelease` 反应堆已实测不含非发布模块）
-- ⬜ 发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号
-  - 📌 **发布时机（2026-09-19 决定）**：**先让 `ypbin-iot-cloud` 的 P4b「access 接协议栈」在本地
-    用 SNAPSHOT 跑通，再发 0.1.0**。理由：access 是 iot-starter 的第一个真实宿主，
-    首个正式版应当带着「有宿主真的在用它」这个事实发布；用 `mvn install` 出来的本地 SNAPSHOT
-    足以支撑 P4b 的开发与验证（`ypbin-iot-cloud` 侧的 `ypbin-iot-bom` import 仍留占位）。
+- ✅ 发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号：**`0.1.0`（2026-09-21）** 与
+  **`0.2.0`（2026-09-29）** 均已发布到 Maven Central
+  - 📌 **发布时机（2026-09-19 决定，已按此执行）**：**先让 `ypbin-iot-cloud` 的 P4b「access 接协议栈」
+    在本地用 SNAPSHOT 跑通，再发 0.1.0**。理由：access 是 iot-starter 的第一个真实宿主，
+    首个正式版应当带着「有宿主真的在用它」这个事实发布；用本地 SNAPSHOT 足以支撑 P4b 的开发与验证
+    （`ypbin-iot-cloud` 侧的 `ypbin-iot-bom` import 当时仍留占位）。
     若 P4b 发现契约缺口，改在发布前比改在发布后便宜得多。
 
 ## M2 · 协议扩容（⬜）

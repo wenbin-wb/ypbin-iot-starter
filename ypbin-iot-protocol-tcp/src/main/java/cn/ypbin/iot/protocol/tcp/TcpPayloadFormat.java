@@ -32,6 +32,9 @@ import java.nio.charset.StandardCharsets;
  *
  * <p><b>默认值 = {@link #BINARY}</b>：保持向后兼容（不配置时与 0.1.0 行为逐字一致）。</p>
  *
+ * <p><b>{@link #KEY_VALUE}</b>：帧是 {@code KEY=VALUE} 键值文本，订阅地址被解释为字段 selector，
+ * 同一帧可服务多个点位；语义、失败矩阵与边界见 {@code docs/TCP-VALUE-SELECTOR.md}。</p>
+ *
  * @author wenbin
  * @since 2026-09-28
  */
@@ -44,7 +47,10 @@ public enum TcpPayloadFormat {
     NUMBER(1, "数值"),
 
     /** 二进制：原样交付 {@code byte[]}，不做任何解码（默认，向后兼容）。 */
-    BINARY(2, "二进制");
+    BINARY(2, "二进制"),
+
+    /** 键值文本：按 {@code KEY=VALUE} 拆帧，用订阅地址（{@code PointAddress.raw}）作为 selector 取值。 */
+    KEY_VALUE(3, "键值文本（valueSelector）");
 
     private final int code;
 

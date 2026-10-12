@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.DataEgress;
+import cn.ypbin.iot.core.exception.AddressParseException;
 import cn.ypbin.iot.core.exception.ConnectionException;
 import cn.ypbin.iot.core.exception.UnsupportedCapabilityException;
 import cn.ypbin.iot.core.model.ConnectionSpec;
@@ -62,6 +63,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
@@ -360,6 +362,84 @@ class TcpSessionBehaviourTest {
         } finally {
             session.close().toCompletableFuture().join();
         }
+    }
+
+    @Test
+    @DisplayName("TCP-12 valueSelector：key-value 一帧多点位各自取值")
+    void keyValueFrameMustServeMultiplePoints() throws Exception {
+        TcpSession session = openSession(TcpPayloadFormat.KEY_VALUE);
+        try {
+            List<PointValue> received = new CopyOnWriteArrayList<>();
+            SubscriptionHandle handle = session.subscribe(SubscribeRequest.of(List.of(
+                            PointAddress.of("TEMP"), PointAddress.of("HUMI"),
+                            PointAddress.of("SEQ"), PointAddress.of("BAT"))),
+                            received::add)
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"),
+                            "TEMP=23.5,HUMI=55,SEQ=12,BAT=90")))
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 4, Duration.ofSeconds(3));
+
+            assertThat(received).hasSize(4);
+            assertThat(valueOf(received, "TEMP").value()).isEqualTo("23.5");
+            assertThat(valueOf(received, "HUMI").value()).isEqualTo("55");
+            assertThat(valueOf(received, "SEQ").value()).isEqualTo("12");
+            assertThat(valueOf(received, "BAT").value()).isEqualTo("90");
+            assertThat(received).allSatisfy(value -> assertThat(value.quality()).isEqualTo(Quality.GOOD));
+            awaitUntil(() -> handle.deliveredCount() >= 4, Duration.ofSeconds(1));
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    @DisplayName("TCP-13 valueSelector：未命中 selector 只让该点位 BAD，同帧其它点位照常")
+    void missingSelectorMustYieldBadPointOnly() throws Exception {
+        TcpSession session = openSession(TcpPayloadFormat.KEY_VALUE);
+        try {
+            List<PointValue> received = new CopyOnWriteArrayList<>();
+            session.subscribe(SubscribeRequest.of(List.of(
+                            PointAddress.of("TEMP"), PointAddress.of("MISSING"))),
+                            received::add)
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"), "TEMP=23.5")))
+                    .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 2, Duration.ofSeconds(3));
+
+            assertThat(valueOf(received, "TEMP").quality()).isEqualTo(Quality.GOOD);
+            PointValue missing = valueOf(received, "MISSING");
+            assertThat(missing.quality()).isEqualTo(Quality.BAD);
+            assertThat(missing.qualityReason()).isEqualTo(TcpAdapter.MSG_SELECTOR_NOT_FOUND);
+            assertThat(missing.value()).isNull();
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
+    }
+
+    @Test
+    @DisplayName("TCP-14 valueSelector：selector 语法非法在订阅期 fail-fast")
+    void invalidSelectorMustFailFastOnSubscribe() throws Exception {
+        TcpSession session = openSession(TcpPayloadFormat.KEY_VALUE);
+        try {
+            CompletionStage<SubscriptionHandle> stage = session.subscribe(
+                    SubscribeRequest.of(List.of(PointAddress.of("bad,selector"))), ignored -> { });
+            assertThatThrownBy(() -> stage.toCompletableFuture().get(3, TimeUnit.SECONDS))
+                    .as("非法 selector 必须在订阅期失败，而不是等帧到了才丢数据")
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(AddressParseException.class)
+                    .hasMessageContaining(AddressParseException.MESSAGE_KEY);
+        } finally {
+            session.close().toCompletableFuture().join();
+        }
+    }
+
+    private static PointValue valueOf(List<PointValue> values, String address) {
+        return values.stream()
+                .filter(value -> value.address().equals(PointAddress.of(address)))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing point value: " + address));
     }
 
     private TcpSession openSession() {

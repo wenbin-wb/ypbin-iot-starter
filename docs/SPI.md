@@ -19,6 +19,12 @@
 | P6 | **框架不碰存储** | 核心只做「连接 + 读写 + 订阅」，数据经 `DataEgress` 微批交给宿主；落库、时序库、规则引擎均不在本仓职责内。 |
 | P7 | **零 Spring 于 core** | `ypbin-iot-core` 仅依赖 JDK 21 + SLF4J + JSpecify，可脱离 Spring 独立使用。Spring 只出现在 `-spring-boot-starter` 与各协议模块的 `autoconfigure` 子包。 |
 
+> **P2 与 `valueSelector`**：`PointAddress.raw` 的解释权始终在协议适配器。TCP 透传在
+> `payload-format=key-value` 时把 `raw` 解释为帧内 `KEY=VALUE` 字段的 selector，因此
+> 一个 `SubscribeRequest` 可含多个地址并各自产出 `PointValue`；其他格式下 `raw` 仍是
+> 订阅标识/流地址。完整语义、失败矩阵与 `raw` 角色见
+> [`docs/TCP-VALUE-SELECTOR.md`](./TCP-VALUE-SELECTOR.md)，行为承诺见 `CONTRACT.md` §四 第 8 条。
+
 > **命名与署名约定**（沿用母仓规范）：所有类顶部带 Apache-2.0 license 头，类级 Javadoc 末尾必带
 > `@author wenbin` + `@since <日期>`，禁 `@date`、禁写版本号；禁用内联全限定类名。
 
