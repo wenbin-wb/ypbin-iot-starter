@@ -1,7 +1,6 @@
 # 发布指南
 
-> **当前状态：本次发布 `0.3.0`（2026-10-12）；已发布 `0.1.0`（2026-09-21）、`0.2.0`（2026-09-29）。**
-> 发布后 `<revision>` 立即推回 `0.3.1-SNAPSHOT`（见「二、每次发布」第 5 步）。
+> **当前状态：开发版 `0.3.1-SNAPSHOT`；已发布 `0.1.0`（2026-09-21）、`0.2.0`（2026-09-29）与 `0.3.0`（2026-10-12）。**
 > 本文件描述的是**每次发布**的流程。
 > 发布插件（central-publishing / GPG）**已配置**在根 pom 的 `release` profile，
 > 但 **GitHub 侧的 Central 凭据与 GPG secrets 至今未配全**——因此**工作流发布路径不可用，历史上三个版本都是本地发布**，见下方「一、发布前置」与「二、每次发布」第 4 步。
@@ -14,7 +13,7 @@
 | 非发布模块隔离 | ✅ | `ypbin-iot-architecture-tests` 与 `ypbin-iot-integration-tests` 由 `dev-only` profile 承载；**已实测**：`-Prelease` 的反应堆为 12 个项目、两者均不在其中。该不变量由 `ModulePublishingTest` 与 `release.yml` 双重守着 |
 | GPG 签名 + `central-publishing-maven-plugin` | ✅ 已配置 | 在根 pom 的 `release` profile（母仓的发布配置在其**根 pom**，不在已发布的父 pom，故本仓需独立声明）|
 | Central 凭据与 GPG 私钥 | ⚠️ **工作流不可用 / 本地可用** | GitHub 仓库 secrets（`MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` / `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE`）与 `release` environment **均未配置**：2026-09-29 的非 `dry-run` 运行中 `release` 作业**实测失败**（`guard` 成功、`release` failure），故 `0.1.0`/`0.2.0`/`0.3.0` **全部由本地发布**。本机可用的凭据在 `~/.m2/settings.xml`：`central` server（用户名/口令）+ `gpg` profile（`gpg.executable`/`gpg.keyname`/`gpg.passphrase`）；已实测 `mvn -Prelease -DskipTests verify` 能正常签名（产出 27 个 `.asc`）。**要走工作流先把上述 secrets 配全** |
-| 已发布版本 | ✅ `0.1.0` / `0.2.0` / `0.3.0` | 三个版本均已发布到 Maven Central，首个真实宿主为 `ypbin-access`。发版后 `<revision>` 应为下一开发版（本次发布后为 `0.3.1-SNAPSHOT`） |
+| 已发布版本 | ✅ `0.1.0` / `0.2.0` / `0.3.0` | 三个版本均已发布到 Maven Central，首个真实宿主为 `ypbin-access`。发版后 `<revision>` 已推回下一开发版 `0.3.1-SNAPSHOT`（**这一步不是可选项**，漏了会出现「同名不同内容」事故） |
 | 仓库可见性 | 私有 | 徽章只对已登录用户可见；转公开后自动生效 |
 
 > 发布工作流默认是 `dry-run`（只做前置校验与打包，不签名不上传）——

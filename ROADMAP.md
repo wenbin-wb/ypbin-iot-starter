@@ -46,8 +46,12 @@
 - ✅ `tools/`：`check-nullaway.sh`（含执行自检）、`export-config-metadata.mjs`（聚合 + 漂移门禁 +
   **模块集合不得静默缩小**）、`export-coverage.mjs`（覆盖率快照，由构建产物生成）、`preflight.sh`（发布前总检，8 步含集成测试）
 - ✅ 发布前置：GPG + `central-publishing-maven-plugin`（在根 pom 的 release profile；`-Prelease` 反应堆已实测不含非发布模块）
-- ✅ 发布 secrets（Central 凭据 + GPG 私钥）与首个正式版本号：**`0.1.0`（2026-09-21）** 与
-  **`0.2.0`（2026-09-29）** 均已发布到 Maven Central
+- ⚠️ 发布 secrets（**GitHub 侧** Central 凭据 + GPG 私钥）：**未配置** —— 工作流 `Release` 的 `release`
+  作业在 2026-09-29 的非 `dry-run` 运行中**实测失败**（`guard` 成功、`release` failure），
+  故 `Release` 工作流**只能跑 `dry-run`**；三个版本均**本地发布**（`~/.m2/settings.xml` 的 `central`
+  server + `gpg` profile，`mvn -Prelease deploy`，发完手工补 tag/Release）。已发布：
+  **`0.1.0`（2026-09-21）**、**`0.2.0`（2026-09-29）** 与 **`0.3.0`（2026-10-12）**
+  （2026-10-12 更正：本行此前写"发布 secrets ✅ 已配"，与工作流的实际状态相反）
   - 📌 **发布时机（2026-09-19 决定，已按此执行）**：**先让 `ypbin-iot-cloud` 的 P4b「access 接协议栈」
     在本地用 SNAPSHOT 跑通，再发 0.1.0**。理由：access 是 iot-starter 的第一个真实宿主，
     首个正式版应当带着「有宿主真的在用它」这个事实发布；用本地 SNAPSHOT 足以支撑 P4b 的开发与验证
