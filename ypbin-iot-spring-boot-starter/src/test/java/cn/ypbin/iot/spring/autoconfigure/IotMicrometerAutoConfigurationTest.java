@@ -20,12 +20,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import cn.ypbin.iot.core.context.MetricsRecorder;
 import cn.ypbin.iot.runtime.context.NoopMetricsRecorder;
 import cn.ypbin.iot.spring.metrics.MicrometerMetricsRecorder;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.Arrays;
+import java.util.Objects;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration;
+import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
+import org.springframework.boot.micrometer.metrics.autoconfigure.export.simple.SimpleMetricsExportAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -37,10 +42,26 @@ import org.springframework.context.annotation.Configuration;
  * 没有时必须回退到无操作实现。两者都用「不抛异常」是测不出来的 ——
  * 一个永远返回 Noop 的实现也能让上下文启动成功。</p>
  *
+ * <p><b>为什么 05/06/07 必须引入真实的 Boot 指标自动配置链</b>：
+ * {@code @ConditionalOnBean(MeterRegistry.class)} 在**装配期**求值，只看「到此为止已注册的
+ * bean 定义」。Boot 4.x 里定义 {@code MeterRegistry} 的是
+ * {@link CompositeMeterRegistryAutoConfiguration}，而 {@link MetricsAutoConfiguration}
+ * 只定义 {@code Clock} / 后处理器，**并不定义 {@code MeterRegistry}**。
+ * 只用手写的 {@code @Configuration} 提供 registry（01/03/04）会让条件在「用户配置早于自动配置」
+ * 的时序下恒为真，从而**测不出**这个顺序缺陷；必须让真实自动配置来提供 registry。</p>
+ *
  * @author wenbin
  * @since 2026-09-15
  */
 class IotMicrometerAutoConfigurationTest {
+
+    /** Boot 4.x 真实指标链：MetricsAutoConfiguration 提供 Clock，CompositeMeterRegistryAutoConfiguration
+     *  定义 MeterRegistry，SimpleMetricsExportAutoConfiguration 给出一个具体的 SimpleMeterRegistry。 */
+    private static final Class<?>[] BOOT_METRICS_CHAIN = {
+            MetricsAutoConfiguration.class,
+            CompositeMeterRegistryAutoConfiguration.class,
+            SimpleMetricsExportAutoConfiguration.class
+    };
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(IotMicrometerAutoConfiguration.class,
@@ -96,17 +117,66 @@ class IotMicrometerAutoConfigurationTest {
     }
 
     @Test
-    @DisplayName("METCFG-05 UP-11：装配注解必须声明「先于 Boot 的 MetricsAutoConfiguration」求值（去掉 afterName 本用例转红）")
-    void orderingMustDeclareAfterBootMetricsAutoConfiguration() {
-        // @ConditionalOnBean(MeterRegistry) 只计数「到此为止已注册的 bean 定义」——
-        // 若本装配早于 Boot 定义 MeterRegistry 的自动配置执行，宿主哪怕有 actuator 也静默回退 Noop（UP-11 根因）。
-        // 该时序无法用 runner 复现（Boot 的 MetricsAutoConfiguration 在 spring-boot-micrometer-metrics 模块），
-        // 改为钉住装配注解本身的声明（变异：删掉 afterName 即转红）。
-        AutoConfiguration annotation =
-                IotMicrometerAutoConfiguration.class.getAnnotation(AutoConfiguration.class);
-        assertThat(annotation.afterName())
-                .as("必须声明在 Boot 的 MetricsAutoConfiguration 之后（字符串声明，避免 Boot 包名编译期耦合）")
-                .contains("org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration");
+    @DisplayName("METCFG-05 真实 Boot 指标链下必须绑定 Micrometer（UP-11 回归；修复前本用例红）")
+    void realBootMetricsChainMustBindMicrometer() {
+        for (boolean iotFirst : new boolean[] {true, false}) {
+            bootMetricsRunner(iotFirst).run(context -> {
+                assertThat(context.getStartupFailure()).isNull();
+                assertThat(context.getBeanProvider(MeterRegistry.class).getIfAvailable())
+                        .as("真实 Boot 指标链本应提供 MeterRegistry（iotFirst=%s）", iotFirst)
+                        .isNotNull();
+                assertThat(context.getBean(MetricsRecorder.class))
+                        .as("Boot 已定义 MeterRegistry 却回退成 Noop —— 框架指标会被全部丢弃（iotFirst=%s）",
+                                iotFirst)
+                        .isInstanceOf(MicrometerMetricsRecorder.class);
+            });
+        }
+    }
+
+    @Test
+    @DisplayName("METCFG-06 记录一次 error 后 ypbin.iot.errors 计数 +1 且带 type 标签")
+    void errorMustBeCountedWithTypeTag() {
+        bootMetricsRunner(true).run(context -> {
+            String type = "iot.tcp.selector.not-found";
+            MetricsRecorder recorder = context.getBean(MetricsRecorder.class);
+            recorder.recordError(type);
+
+            MeterRegistry registry = context.getBean(MeterRegistry.class);
+            Counter counter = Objects.requireNonNull(
+                    registry.find("ypbin.iot.errors").tag("type", type).counter(),
+                    "ypbin.iot.errors{type=" + type + "} 未注册");
+            assertThat(counter.count()).isEqualTo(1.0d);
+
+            recorder.recordError(type);
+            assertThat(counter.count()).isEqualTo(2.0d);
+        });
+    }
+
+    @Test
+    @DisplayName("METCFG-07 Boot 只提供 Clock（无 MeterRegistry）时必须回退 no-op，不得绑定假指标")
+    void bootClockWithoutRegistryFallsBackToNoop() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(IotMicrometerAutoConfiguration.class,
+                        IotAutoConfiguration.class, MetricsAutoConfiguration.class))
+                .run(context -> {
+                    assertThat(context.getStartupFailure()).isNull();
+                    assertThat(context.getBeanProvider(MeterRegistry.class).getIfAvailable()).isNull();
+                    assertThat(context.getBean(MetricsRecorder.class))
+                            .isInstanceOf(NoopMetricsRecorder.class);
+                });
+    }
+
+    private static ApplicationContextRunner bootMetricsRunner(boolean iotFirst) {
+        Class<?>[] iot = {IotMicrometerAutoConfiguration.class, IotAutoConfiguration.class};
+        Class<?>[] all = iotFirst ? concat(iot, BOOT_METRICS_CHAIN)
+                : concat(BOOT_METRICS_CHAIN, iot);
+        return new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(all));
+    }
+
+    private static Class<?>[] concat(Class<?>[] first, Class<?>[] second) {
+        Class<?>[] result = Arrays.copyOf(first, first.length + second.length);
+        System.arraycopy(second, 0, result, first.length, second.length);
+        return result;
     }
 
     /**
