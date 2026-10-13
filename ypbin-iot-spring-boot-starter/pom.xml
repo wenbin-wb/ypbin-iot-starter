@@ -55,6 +55,15 @@
             <artifactId>micrometer-core</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- 回归测试专用：真实 Boot 指标自动配置链（MetricsAutoConfiguration /
+             CompositeMeterRegistryAutoConfiguration）在 Boot 4 中位于独立制品
+             spring-boot-micrometer-metrics，spring-boot-actuator-autoconfigure 已不再携带它。
+             test 作用域，不进消费者的运行时 classpath。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-micrometer-metrics</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <properties>

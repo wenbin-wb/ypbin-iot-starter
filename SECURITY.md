@@ -45,7 +45,7 @@
   另：`HOSTNAME` / `APPLICATION_URI` 两个可选校验的比对值取自**服务端自述**，
   **对主动 MITM 无防护** —— 真正的门闩只有信任列表本身。见 `docs/PROTOCOLS.md`。
 - **Modbus RTU 无真实硬件验证**：仅协议层与串口配置校验，未在真实串口设备上验证过。
-- **指标默认不落盘**：未提供 `MeterRegistry` 时指标走无操作实现并被丢弃（装配期会打 INFO），
+- **指标默认不落盘**：未提供 `MeterRegistry` 时指标走无操作实现并被丢弃；classpath 有 micrometer 时装配期会打 **WARN**（classpath 无 micrometer 时为 INFO，因为本来就无从采集），
   这不是「静默失败」而是明确的降级路径。
 - **`ypbin-iot-test` 会传递 JUnit / AssertJ**：它是发布出去的测试基座（TCK），
   依赖作用域是 compile 属有意为之；**生产代码不应依赖它**。

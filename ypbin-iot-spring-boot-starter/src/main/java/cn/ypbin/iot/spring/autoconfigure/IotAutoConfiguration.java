@@ -116,20 +116,21 @@ public class IotAutoConfiguration {
     /**
      * 指标门面：默认无操作实现，宿主可覆盖为 Micrometer 桥接。
      *
+     * <p>走到本方法说明 {@link IotMicrometerAutoConfiguration} 没有注册指标门面：
+     * 要么 classpath 上没有 micrometer，要么该装配类被宿主排除/过滤。
+     * 若 micrometer 在 classpath 上而没有 MeterRegistry，由
+     * {@link IotMicrometerAutoConfiguration} 负责回退并打 WARN —— 不是这里。</p>
+     *
      * @return 指标门面
      */
     @Bean
     @ConditionalOnMissingBean
     public MetricsRecorder iotMetricsRecorder() {
         // 不能用 debug：指标被丢弃是宿主应当知情的事，只在 debug 打一行等于静默降级。
-        // 走到这里说明**没有** MeterRegistry bean（否则 IotMicrometerAutoConfiguration 会先生效）。
-        // UP-11：classpath **有** micrometer 却仍未命中 ⇒ 升 WARN + 可执行指引（大概率是装配顺序问题，
-        // 不要自定义 MetricsRecorder 抢 bean——那会让「顺序敏感」这一根因继续存在）。
         if (isMicrometerOnClasspath()) {
-            log.warn("[ypbin-iot] micrometer 在 classpath 上但没有可用的 MeterRegistry bean —— "
+            log.warn("[ypbin-iot] micrometer 在 classpath 上但没有装配 Micrometer 指标桥 —— "
                     + "iotMetricsRecorder 回退到 no-op，框架指标（read/write/subscription/errors）全部丢弃。"
-                    + "请检查为何 MetricsAutoConfiguration 未生效（如 actuator 依赖缺失/被排除），"
-                    + "或升级 iot-starter 到含 UP-11 修复的版本；不要自定义 MetricsRecorder 抢 bean。");
+                    + "请确认 IotMicrometerAutoConfiguration 未被排除；若确实不需要指标可忽略本告警。");
         } else {
             log.info("[ypbin-iot] no MeterRegistry found; iotMetricsRecorder falls back to the no-op "
                     + "implementation and metrics are DISCARDED. Add micrometer (e.g. spring-boot-starter-actuator) "

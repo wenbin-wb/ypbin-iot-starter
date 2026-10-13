@@ -26,7 +26,7 @@
 > 欢迎反馈问题，尤其是「现场设备连不上 / 行为与文档不符」这类真实性缺口。
 >
 > **已知限制**（详见 [`ROADMAP.md`](./ROADMAP.md) 与 [`docs/PROTOCOLS.md`](./docs/PROTOCOLS.md)）：
-> 指标桥需要宿主提供 `MeterRegistry`；OPC UA 信任目录只能放「自签证书」（精确 pin）或「自签 CA」（信任该 CA 签发的一切）——CA 签发的叶子当不了信任锚；
+> 指标桥在 Boot 提供 `MeterRegistry` 时自动生效（实例化期用 `ObjectProvider` 解析，与自动配置顺序无关）；classpath 有 micrometer 却没有 `MeterRegistry` 时回退无操作并打 **WARN**（不静默降级）；OPC UA 信任目录只能放「自签证书」（精确 pin）或「自签 CA」（信任该 CA 签发的一切）——CA 签发的叶子当不了信任锚；
 > `HOSTNAME`/`APPLICATION_URI` 校验对主动 MITM 无防护；
 > 集成测试（`-Pit`）目前只有 5 个场景（MQTT 全链路 + 多协议并存），覆盖面还薄。
 
@@ -152,7 +152,7 @@ ypbin:
 | `ypbin-iot-core` | SPI 契约、值对象、异常体系 | ❌ 零依赖 | ❌ 零依赖 |
 | `ypbin-iot-transport` | Netty 传输底座：TCP/UDP/串口/WebSocket 连接工厂与编解码基座 | ❌ | ✅ |
 | `ypbin-iot-runtime` | 适配器注册、连接复用、会话管理、时间轮调度、微批出口 | ❌ | ❌ |
-| `ypbin-iot-spring-boot-starter` | 条件装配、`ypbin.iot.*` 配置、Actuator、**Micrometer 指标桥**（宿主有 `MeterRegistry` 时自动生效，否则回退无操作并打 INFO）| ✅ | 传递引入 |
+| `ypbin-iot-spring-boot-starter` | 条件装配、`ypbin.iot.*` 配置、Actuator、**Micrometer 指标桥**（宿主有 `MeterRegistry` 时自动生效；classpath 有 micrometer 但无 registry 时回退无操作并打 **WARN**）| ✅ | 传递引入 |
 
 ### 协议模块（按需引入）
 
