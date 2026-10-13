@@ -8,6 +8,24 @@
 已发布：**`0.1.0`（2026-09-21）**、**`0.2.0`（2026-09-29）** 与 **`0.3.0`（2026-10-12）**，均已发布到 Maven Central；
 其中 `0.1.0` 由 `ypbin-access` 作为首个真实宿主接入验证。
 
+## [未发布]
+
+### 修复
+
+- **SDK 指标桥在真实宿主里从未生效（UP-11 二次修复）**：Boot 4.x 定义 `MeterRegistry` 的自动配置是
+  `CompositeMeterRegistryAutoConfiguration`，而 `MetricsAutoConfiguration` 只定义 `Clock` /
+  `MeterRegistryPostProcessor` / `PropertiesMeterFilter`，并不定义 `MeterRegistry`。原实现用
+  `@AutoConfiguration(afterName = "...MetricsAutoConfiguration")` + 方法级
+  `@ConditionalOnBean(MeterRegistry.class)` 判存在性，而 `@ConditionalOnBean` 在**装配期**求值、
+  只计入「到此为止已注册的 bean 定义」：本装配比 Boot 定义 registry 的自动配置先求值条件，
+  恒判假。结果宿主 `ypbin-access`（有 actuator、`/actuator/metrics` 93 条指标）每次启动都回退
+  no-op 并打 WARN，`ypbin.iot.errors`（含 `type=iot.tcp.selector.not-found`）永远查不到。
+  修法：删除 `afterName` 与 `@ConditionalOnBean`，改为在 bean 方法注入
+  `ObjectProvider<MeterRegistry>`、于**实例化期**解析（此时全部自动配置的 bean 定义已注册），
+  与自动配置顺序无关；没有 registry 时回退 no-op 并打 **WARN**（不静默降级）。
+  指标名/标签契约不变（`ypbin.iot.errors` + `type`）。回归用例 `METCFG-05/06/07` 用真实 Boot
+  指标链构造上下文，修复前红、修复后绿；设计说明见 `docs/DESIGN.md` §3.7。
+
 ## [0.3.0] - 2026-10-12
 
 ### 新增

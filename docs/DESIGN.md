@@ -194,7 +194,7 @@ admin 侧接入本仓时，除实现 `DeviceRegistry` / `DataSink` 外，必须�
 | `ypbin-iot-core` | SPI 契约、值对象、异常体系。**零 Spring、零 Netty** | JDK 21 · slf4j-api · jspecify | ✅ |
 | `ypbin-iot-transport` | Netty 4.1 传输底座：TCP/UDP/串口/WebSocket 的连接工厂、编解码基座、空闲检测、流量整形 | core · netty-* ·（epoll native 可选） | ✅ |
 | `ypbin-iot-runtime` | 运行时内核：适配器注册中心、连接注册中心、会话管理、重连退避、分层时间轮调度、微批出口 | core（**不含 Netty / Spring**） | ✅ |
-| `ypbin-iot-spring-boot-starter` | Spring 装配层：条件装配、`ypbin.iot.*` 配置、Actuator 端点、健康指示器、生命周期编排；**Micrometer 指标桥已实现**（`IotMicrometerAutoConfiguration` + `MicrometerMetricsRecorder`：宿主提供 `MeterRegistry` 时自动生效，否则回退无操作并打 INFO）| runtime · transport · spring-boot-autoconfigure | ✅ |
+| `ypbin-iot-spring-boot-starter` | Spring 装配层：条件装配、`ypbin.iot.*` 配置、Actuator 端点、健康指示器、生命周期编排；**Micrometer 指标桥已实现**（`IotMicrometerAutoConfiguration` + `MicrometerMetricsRecorder`：宿主提供 `MeterRegistry` 时自动生效，实例化期 `ObjectProvider` 解析、与自动配置顺序无关；确实无 registry 时回退无操作并打 **WARN**，见 §3.7）| runtime · transport · spring-boot-autoconfigure | ✅ |
 
 #### 协议模块（21）
 
@@ -637,6 +637,38 @@ IotLifecycle.onReady()
 2. **Actuator 端点** `/actuator/iot`：返回已注册适配器、能力矩阵、连接数、会话数、egress 队列深度与丢弃计数。
 3. **`IotDiagnostics` 诊断端点**：对单个设备执行 `probe` 并返回完整诊断链（DNS → TCP → TLS → 协议握手 → 首读），
    这是现场排查的刚需——工业现场最耗时的工作就是回答「到底是网络不通还是协议配错了」。
+
+### 3.7 指标桥为什么曾经恒不生效（UP-11）
+
+**症状**：宿主 `ypbin-access` 引入 `spring-boot-starter-actuator`（`/actuator/metrics` 能列出 93 条指标），
+但每次启动都打 `WARN ... micrometer 在 classpath 上但没有可用的 MeterRegistry bean —— iotMetricsRecorder 回退到 no-op`；
+`ypbin.iot.errors{type=iot.tcp.selector.not-found}` 永远查不到 —— 框架承诺的指标被整条丢弃。
+
+**真因（不是「actuator 没引」）**：`@ConditionalOnBean` 是**装配期**条件 —— 解析 bean 定义时求值，
+只统计「到此为止已注册的 bean 定义」。原实现把桥锚在
+`afterName = org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration` 上，
+但 Boot 4.x 里**这个类并不定义 `MeterRegistry`**（它只定义 `Clock`、`MeterRegistryPostProcessor`、
+`PropertiesMeterFilter`、`MeterRegistryCloser` 等），真正定义 `MeterRegistry` 的是
+`CompositeMeterRegistryAutoConfiguration`（Boot 自己让 `MetricsAutoConfiguration` 排在它之前）。
+于是本装配的 `@ConditionalOnBean(MeterRegistry.class)` 在 registry 定义出现之前就被求值 → 恒判假。
+该时序可用 `ApplicationContextRunner` + 真实 Boot 指标链复现（回归用例 `METCFG-05`）：
+`ConditionEvaluationReport` 明确给出
+`IotMicrometerAutoConfiguration#iotMetricsRecorder NOMATCH @ConditionalOnBean ... did not find any beans of type MeterRegistry`，
+而同一个上下文里 `CompositeMeterRegistryAutoConfiguration` 是 MATCH、容器最终确实有 `MeterRegistry`；
+只用手写 `@Configuration` 提供 registry 的用例（原来的 METCFG-01/03/04）在「用户配置早于自动配置」的时序下恒为真，
+**测不出**这个缺陷。
+
+**修法（顺序无关）**：不再维护对 Boot 自动配置名单的依赖（删掉 `afterName`），也不再用方法级 `@ConditionalOnBean`；
+改为在 `iotMetricsRecorder(ObjectProvider<MeterRegistry>)` 里于 bean **实例化期**调用 `getIfAvailable()` ——
+实例化一定发生在所有自动配置的 bean 定义注册完毕之后，因此与自动配置先后顺序无关。约定：
+
+| 宿主情形 | 结果 | 日志 |
+|---|---|---|
+| 有 `MeterRegistry`（如引入 actuator） | 绑定 `MicrometerMetricsRecorder` | INFO `bound to Micrometer` |
+| classpath 有 micrometer 但确实没有 registry | 回退 `NoopMetricsRecorder` | **WARN**（指标全部丢弃，不静默降级） |
+| classpath 无 micrometer | 由 `IotAutoConfiguration` 回退 no-op | INFO |
+
+指标名与标签契约保持不变：`ypbin.iot.errors` + `type` 标签（回归用例 `METCFG-06` 断言计数 +1 且带标签）。
 
 ---
 
