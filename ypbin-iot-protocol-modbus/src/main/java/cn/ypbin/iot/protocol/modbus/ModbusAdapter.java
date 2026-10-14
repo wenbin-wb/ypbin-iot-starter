@@ -190,6 +190,7 @@ public final class ModbusAdapter implements ProtocolAdapter {
             return Stages.failed(ex);
         }
         if (client == null) {
+            context.metrics().recordError(MSG_TRANSPORT_UNSUPPORTED);
             return Stages.failed(new ConnectionException(spec.connectionId(), MSG_TRANSPORT_UNSUPPORTED, scheme));
         }
         return Stages.normalize(client.connectAsync().thenApply(ignored -> {
@@ -252,6 +253,7 @@ public final class ModbusAdapter implements ProtocolAdapter {
     public CompletionStage<DeviceSession> bind(ProtocolConnection connection, DeviceSpec device,
             AdapterContext context) {
         if (!(connection instanceof ModbusConnection modbusConnection)) {
+            context.metrics().recordError(MSG_TRANSPORT_UNSUPPORTED);
             return Stages.failed(new ProtocolException(MSG_TRANSPORT_UNSUPPORTED,
                     "expected ModbusConnection but got " + connection.getClass().getName()));
         }
@@ -274,7 +276,9 @@ public final class ModbusAdapter implements ProtocolAdapter {
             } finally {
                 connection.close();
             }
-        }).exceptionally(error -> ProbeResult.unreachable(DESCRIPTOR,
-                        Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE))));
+        }).exceptionally(error -> {
+            context.metrics().recordError(MSG_CONNECTION_INACTIVE);
+            return ProbeResult.unreachable(DESCRIPTOR, Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE));
+        }));
     }
 }

@@ -183,6 +183,7 @@ public final class OpcUaAdapter implements ProtocolAdapter {
         // 不是 "opc"。这个差异只有端到端测试才会暴露 —— 按直觉写白名单会让所有连接被拒。
         if (!OPC_TCP_SCHEME.equals(scheme) && !"opc".equals(scheme) && !"opcua".equals(scheme)
                 && !"tcp".equals(scheme)) {
+            context.metrics().recordError(MSG_CONNECTION_INACTIVE);
             return Stages.failed(new ConnectionException(spec.connectionId(), MSG_CONNECTION_INACTIVE, scheme));
         }
         if (spec.tls().enabled()) {
@@ -194,6 +195,7 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             // 用户名密码在 SecurityPolicy#None 下是**明文**传输的（Nonce 加密只在非 None 策略下生效）。
             // 而本模块尚未实现任何非 None 策略 —— 唯一负责任的行为是拒绝，
             // 而不是把凭据明晃晃地发出去、同时让宿主以为"认证过了"。
+            context.metrics().recordError(MSG_CREDENTIALS_NEED_SECURITY);
             return Stages.failed(new ConnectionException(spec.connectionId(), MSG_CREDENTIALS_NEED_SECURITY,
                     properties.username()));
         }
@@ -214,6 +216,7 @@ public final class OpcUaAdapter implements ProtocolAdapter {
                     // 「keystore 缺失」「策略不支持」这类配置原因抹平，
                     // 宿主看到的只有「连接失败」，排查方向被引向网络
                     if (cause instanceof IotException domain) {
+                        recordSecurityError(context, domain.getMessageKey());
                         throw domain;
                     }
                     if (cause instanceof TimeoutException) {
@@ -223,6 +226,30 @@ public final class OpcUaAdapter implements ProtocolAdapter {
                     throw new ConnectionException(spec.connectionId(), cause,
                             IotMessageKeys.CONNECTION_FAILED, endpointUrl);
                 }));
+    }
+
+    /**
+     * 把安全配置类领域异常计入错误指标。
+     *
+     * <p>只统计白名单内的稳定错误码；其它键（连接失败/超时）由 {@code probe} 等专属路径计数，
+     * 不在此重复。开链早期的配置错误此前只抛异常不留指标，接入侧无法从指标面区分
+     * 「证书没配」与「网络不通」。</p>
+     *
+     * @param context    适配器上下文
+     * @param messageKey 领域异常的消息键
+     */
+    private static void recordSecurityError(AdapterContext context, String messageKey) {
+        switch (messageKey) {
+            case OpcUaAdapter.MSG_KEYSTORE_MISSING ->
+                    context.metrics().recordError(OpcUaAdapter.MSG_KEYSTORE_MISSING);
+            case OpcUaAdapter.MSG_TRUST_NOT_CONFIGURED ->
+                    context.metrics().recordError(OpcUaAdapter.MSG_TRUST_NOT_CONFIGURED);
+            case OpcUaAdapter.MSG_CREDENTIAL_MISSING ->
+                    context.metrics().recordError(OpcUaAdapter.MSG_CREDENTIAL_MISSING);
+            default -> {
+                // 非安全类领域异常：由各自专属路径计数
+            }
+        }
     }
 
     /**
@@ -353,11 +380,13 @@ public final class OpcUaAdapter implements ProtocolAdapter {
     public CompletionStage<DeviceSession> bind(ProtocolConnection connection, DeviceSpec device,
             AdapterContext context) {
         if (!(connection instanceof OpcUaConnection opcUaConnection)) {
+            context.metrics().recordError(MSG_CONNECTION_INACTIVE);
             return Stages.failed(new ConnectionException(connection.connectionId(),
                     MSG_CONNECTION_INACTIVE, connection.getClass().getName()));
         }
         if (!opcUaConnection.state().isUsable()) {
             // 向已关闭的链路注册会话会得到一个永不工作的会话（宿主看起来"绑定成功"）
+            context.metrics().recordError(MSG_CONNECTION_INACTIVE);
             return Stages.failed(new ConnectionException(connection.connectionId(),
                     MSG_CONNECTION_INACTIVE, "connection is not usable"));
         }
@@ -375,7 +404,9 @@ public final class OpcUaAdapter implements ProtocolAdapter {
             } finally {
                 connection.close();
             }
-        }).exceptionally(error -> ProbeResult.unreachable(DESCRIPTOR,
-                        Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE))));
+        }).exceptionally(error -> {
+            context.metrics().recordError(MSG_CONNECTION_INACTIVE);
+            return ProbeResult.unreachable(DESCRIPTOR, Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE));
+        }));
     }
 }

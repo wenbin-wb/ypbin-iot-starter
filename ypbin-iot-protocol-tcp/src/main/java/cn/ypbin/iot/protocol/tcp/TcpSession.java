@@ -196,6 +196,7 @@ public final class TcpSession implements DeviceSession {
             if (!encoded.success()) {
                 statuses.add(PointWriteStatus.fail(write.address(), encoded.messageKey()));
                 context.metrics().recordWrite(Duration.ZERO, false);
+                recordEncodeFailure(encoded.messageKey());
                 index++;
                 continue;
             }
@@ -224,11 +225,53 @@ public final class TcpSession implements DeviceSession {
         if (failed) {
             statuses.add(PointWriteStatus.fail(write.address(), TcpAdapter.MSG_WRITE_FAILED));
             context.metrics().recordWrite(Duration.ZERO, false);
+            context.metrics().recordError(TcpAdapter.MSG_WRITE_FAILED);
             context.log(LogLevel.WARN, TcpAdapter.MSG_WRITE_FAILED, device.deviceId());
             return;
         }
         statuses.add(PointWriteStatus.ok(write.address()));
         context.metrics().recordWrite(Duration.ZERO, true);
+    }
+
+    /**
+     * 把一次写载荷编码失败计入错误指标。
+     *
+     * <p>只认两个稳定错误码作为标签；其它字符串（未来新增原因）不新造维度，
+     * 避免标签基数失控（见 {@link cn.ypbin.iot.core.context.MetricsRecorder#recordError} 的约定）。</p>
+     *
+     * @param messageKey 编码失败的消息键
+     */
+    private void recordEncodeFailure(String messageKey) {
+        if (TcpPayloadCodec.MSG_HEX_INVALID.equals(messageKey)) {
+            context.metrics().recordError(TcpPayloadCodec.MSG_HEX_INVALID);
+        } else {
+            context.metrics().recordError(TcpPayloadCodec.MSG_PAYLOAD_UNSUPPORTED);
+        }
+    }
+
+    /**
+     * 把一次入站帧解码失败计入错误指标。
+     *
+     * <p>只统计白名单内的稳定错误码；未知原因不产生标签（同样是为了避免基数爆炸）。</p>
+     *
+     * @param reason 失败点位的质量原因（消息键）
+     */
+    private void recordDecodeFailure(String reason) {
+        switch (reason) {
+            case TcpAdapter.MSG_PAYLOAD_NOT_UTF8 ->
+                    context.metrics().recordError(TcpAdapter.MSG_PAYLOAD_NOT_UTF8);
+            case TcpAdapter.MSG_PAYLOAD_NOT_NUMBER ->
+                    context.metrics().recordError(TcpAdapter.MSG_PAYLOAD_NOT_NUMBER);
+            case TcpAdapter.MSG_PAYLOAD_NOT_KEY_VALUE ->
+                    context.metrics().recordError(TcpAdapter.MSG_PAYLOAD_NOT_KEY_VALUE);
+            case TcpAdapter.MSG_SELECTOR_NOT_FOUND ->
+                    context.metrics().recordError(TcpAdapter.MSG_SELECTOR_NOT_FOUND);
+            case TcpAdapter.MSG_SELECTOR_VALUE_EMPTY ->
+                    context.metrics().recordError(TcpAdapter.MSG_SELECTOR_VALUE_EMPTY);
+            default -> {
+                // 未知原因不进标签：只统计文档承诺的稳定错误码
+            }
+        }
     }
 
     @Override
@@ -250,6 +293,7 @@ public final class TcpSession implements DeviceSession {
                 }
             }
         } else if (request.addresses().size() > 1) {
+            context.metrics().recordError(TcpAdapter.MSG_MULTI_ADDRESS_UNSUPPORTED);
             return CompletableFuture.failedFuture(new IllegalArgumentException(
                     TcpAdapter.MSG_MULTI_ADDRESS_UNSUPPORTED
                             + ": 非 key-value 的 tcp 透传为单点位流，一次订阅仅支持 1 个地址，收到 "
@@ -332,6 +376,13 @@ public final class TcpSession implements DeviceSession {
             return;
         }
         List<PointValue> values = decodeAll(subscription.addresses(), payload);
+        // 解码失败（非 UTF-8 / 非数值 / 非键值帧 / selector 未命中）必须留下错误指标：
+        // 每个 BAD 点位各记一次，与同帧其它健康点位互不掩盖。
+        for (PointValue value : values) {
+            if (!value.isGood() && value.qualityReason() != null) {
+                recordDecodeFailure(value.qualityReason());
+            }
+        }
         subscription.incrementDelivered(values.size());
         context.metrics().recordSubscriptionBatch(values.size());
         DataListener listener = subscription.listener();

@@ -157,6 +157,7 @@ public final class MqttAdapter implements ProtocolAdapter {
         if (!"tcp".equals(scheme) && !"mqtt".equals(scheme)) {
             // 只接受明文 TCP 的两种写法。TLS（ssl/mqtts）与 WebSocket（ws/wss）**尚未实现**，
             // 此前把它们放进白名单会让用户以为在加密，实际拿到明文连接 —— 安全静默降级。
+            context.metrics().recordError(MSG_TRANSPORT_UNSUPPORTED);
             return Stages.failed(new ConnectionException(spec.connectionId(), MSG_TRANSPORT_UNSUPPORTED, scheme));
         }
         if (spec.tls().enabled()) {
@@ -221,6 +222,7 @@ public final class MqttAdapter implements ProtocolAdapter {
     public CompletionStage<DeviceSession> bind(ProtocolConnection connection, DeviceSpec device,
             AdapterContext context) {
         if (!(connection instanceof MqttConnection mqttConnection)) {
+            context.metrics().recordError(MSG_TRANSPORT_UNSUPPORTED);
             return Stages.failed(new ConnectionException(connection.connectionId(),
                     MSG_TRANSPORT_UNSUPPORTED, connection.getClass().getName()));
         }
@@ -239,8 +241,10 @@ public final class MqttAdapter implements ProtocolAdapter {
             } finally {
                 connection.close();
             }
-        }).exceptionally(error -> ProbeResult.unreachable(DESCRIPTOR,
-                        Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE))));
+        }).exceptionally(error -> {
+            context.metrics().recordError(MSG_CONNECTION_INACTIVE);
+            return ProbeResult.unreachable(DESCRIPTOR, Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE));
+        }));
     }
 
 }
