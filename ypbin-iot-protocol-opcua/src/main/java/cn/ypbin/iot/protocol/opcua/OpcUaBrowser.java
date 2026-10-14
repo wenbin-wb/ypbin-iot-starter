@@ -92,6 +92,7 @@ final class OpcUaBrowser implements BrowseExtension {
         return Stages.normalize(browseLevel(root, 0, maxDepth, maxNodes, collected)
                 .thenApply(ignored -> {
                     if (collected.size() >= maxNodes) {
+                        context.metrics().recordError(OpcUaAdapter.MSG_BROWSE_TRUNCATED);
                         context.log(LogLevel.WARN, OpcUaAdapter.MSG_BROWSE_TRUNCATED,
                                 String.valueOf(maxNodes));
                     }

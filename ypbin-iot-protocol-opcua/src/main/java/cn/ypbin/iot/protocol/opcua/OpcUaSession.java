@@ -208,6 +208,7 @@ final class OpcUaSession implements DeviceSession {
             // 否则宿主无法区分「个别点位坏」与「链路已死」
             if (!nodeIds.isEmpty() && values.stream().noneMatch(PointValue::isGood)
                     && !connection.state().isUsable()) {
+                context.metrics().recordError(OpcUaAdapter.MSG_CONNECTION_INACTIVE);
                 throw new ProtocolException(OpcUaAdapter.MSG_CONNECTION_INACTIVE, device.deviceId());
             }
             Duration elapsed = Duration.between(started, finished);
@@ -218,6 +219,7 @@ final class OpcUaSession implements DeviceSession {
 
     private PointValue toPointValue(PointAddress address, @Nullable DataValue dataValue, Instant now) {
         if (dataValue == null) {
+            context.metrics().recordError(OpcUaAdapter.MSG_NO_RESULT);
             return PointValue.bad(address, Quality.BAD, OpcUaAdapter.MSG_NO_RESULT, now);
         }
         StatusCode statusCode = dataValue.getStatusCode();
@@ -249,6 +251,7 @@ final class OpcUaSession implements DeviceSession {
                 nodeIds.add(null);
                 dataValues.add(null);
                 statuses.add(PointWriteStatus.fail(write.address(), OpcUaAdapter.MSG_ADDRESS_INVALID));
+                context.metrics().recordError(OpcUaAdapter.MSG_ADDRESS_INVALID);
             }
         }
         CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
@@ -284,13 +287,21 @@ final class OpcUaSession implements DeviceSession {
                                     || position >= results.size()) {
                                 statuses.set(index, PointWriteStatus.fail(write.address(),
                                         OpcUaAdapter.MSG_WRITE_FAILED));
+                                context.metrics().recordError(OpcUaAdapter.MSG_WRITE_FAILED);
                                 continue;
                             }
                             StatusCode statusCode = results.get(position);
-                            statuses.set(index, statusCode != null && statusCode.isGood()
-                                    ? PointWriteStatus.ok(write.address())
-                                    : PointWriteStatus.fail(write.address(), statusCode == null
-                                            ? OpcUaAdapter.MSG_WRITE_FAILED : OpcUaAdapter.MSG_STATUS_BAD));
+                            if (statusCode != null && statusCode.isGood()) {
+                                statuses.set(index, PointWriteStatus.ok(write.address()));
+                            } else if (statusCode == null) {
+                                statuses.set(index, PointWriteStatus.fail(write.address(),
+                                        OpcUaAdapter.MSG_WRITE_FAILED));
+                                context.metrics().recordError(OpcUaAdapter.MSG_WRITE_FAILED);
+                            } else {
+                                statuses.set(index, PointWriteStatus.fail(write.address(),
+                                        OpcUaAdapter.MSG_STATUS_BAD));
+                                context.metrics().recordError(OpcUaAdapter.MSG_STATUS_BAD);
+                            }
                         }
                         return null;
                     }));
@@ -300,6 +311,7 @@ final class OpcUaSession implements DeviceSession {
             // 否则宿主无法区分「个别写项被拒」与「链路已死」
             if (!statuses.isEmpty() && statuses.stream().noneMatch(PointWriteStatus::success)
                     && !connection.state().isUsable()) {
+                context.metrics().recordError(OpcUaAdapter.MSG_CONNECTION_INACTIVE);
                 throw new ProtocolException(OpcUaAdapter.MSG_CONNECTION_INACTIVE, device.deviceId());
             }
             Duration elapsed = Duration.between(started, context.clock().instant());
@@ -311,6 +323,7 @@ final class OpcUaSession implements DeviceSession {
     @Override
     public CompletionStage<SubscriptionHandle> subscribe(SubscribeRequest request, DataListener listener) {
         if (closed.get()) {
+            context.metrics().recordError(OpcUaAdapter.MSG_SESSION_CLOSED);
             return CompletableFuture.failedFuture(
                     new ProtocolException(OpcUaAdapter.MSG_SESSION_CLOSED, device.deviceId()));
         }
@@ -356,8 +369,13 @@ final class OpcUaSession implements DeviceSession {
                         device.deviceId(), String.valueOf(failed), String.valueOf(items.size()));
             }
             if (failed == createResults.size()) {
+                // 全失败：只计「订阅失败」，不与「部分失败」重复计数
+                context.metrics().recordError(OpcUaAdapter.MSG_SUBSCRIBE_FAILED);
                 uaSubscription.deleteAsync().toCompletableFuture().join();
                 throw new ProtocolException(OpcUaAdapter.MSG_SUBSCRIBE_FAILED, device.deviceId());
+            }
+            if (failed > 0) {
+                context.metrics().recordError(OpcUaAdapter.MSG_SUBSCRIBE_PARTIAL_FAILED);
             }
             subscription.attach(uaSubscription);
             subscriptions.put(subscription.subscriptionId(), subscription);

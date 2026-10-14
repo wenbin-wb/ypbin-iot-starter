@@ -37,6 +37,13 @@
             <artifactId>ypbin-iot-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- 错误指标契约测试用 SimpleMeterRegistry；micrometer-core 在 starter 里是 optional，
+             不会传递到本模块的测试 classpath，需显式引入（test 作用域，不进消费者运行时） -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

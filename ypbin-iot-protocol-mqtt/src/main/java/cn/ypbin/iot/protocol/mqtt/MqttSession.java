@@ -176,6 +176,7 @@ final class MqttSession implements DeviceSession {
         // 且异常被 thenCompose 包成 CompletionException（违反逐项失败与 C11 两条契约）。
         if (!MqttTopicMatcher.isValidFilter(topic) || topic.indexOf('+') >= 0 || topic.indexOf('#') >= 0) {
             statuses.add(PointWriteStatus.fail(write.address(), MqttAdapter.MSG_TOPIC_INVALID));
+            context.metrics().recordError(MqttAdapter.MSG_TOPIC_INVALID);
             return CompletableFuture.completedFuture(null);
         }
         byte[] payload;
@@ -183,6 +184,7 @@ final class MqttSession implements DeviceSession {
             payload = toPayload(write.value());
         } catch (RuntimeException ex) {
             statuses.add(PointWriteStatus.fail(write.address(), MqttAdapter.MSG_VALUE_INVALID));
+            context.metrics().recordError(MqttAdapter.MSG_VALUE_INVALID);
             return CompletableFuture.completedFuture(null);
         }
         CompletionStage<?> stage;
@@ -196,6 +198,7 @@ final class MqttSession implements DeviceSession {
                     .send();
         } catch (RuntimeException ex) {
             statuses.add(PointWriteStatus.fail(write.address(), MqttAdapter.MSG_PUBLISH_FAILED));
+            context.metrics().recordError(MqttAdapter.MSG_PUBLISH_FAILED);
             return CompletableFuture.completedFuture(null);
         }
         return stage
@@ -208,6 +211,7 @@ final class MqttSession implements DeviceSession {
                         statuses.add(PointWriteStatus.ok(write.address()));
                     } else {
                         statuses.add(PointWriteStatus.fail(write.address(), MqttAdapter.MSG_PUBLISH_FAILED));
+                        context.metrics().recordError(MqttAdapter.MSG_PUBLISH_FAILED);
                         log.debug("[ypbin-iot] mqtt publish failed for device {} topic {}: {}",
                                 device.deviceId(), topic, error.toString());
                     }
@@ -235,6 +239,7 @@ final class MqttSession implements DeviceSession {
                 qos = Integer.parseInt(configured.trim());
             } catch (NumberFormatException ex) {
                 context.log(LogLevel.WARN, MqttAdapter.MSG_QOS_INVALID, write.address().raw(), configured);
+                context.metrics().recordError(MqttAdapter.MSG_QOS_INVALID);
             }
         }
         return MqttQos.fromCode(Math.min(Math.max(qos, 0), MqttAdapter.MAX_QOS));
@@ -272,6 +277,7 @@ final class MqttSession implements DeviceSession {
     @Override
     public CompletionStage<SubscriptionHandle> subscribe(SubscribeRequest request, DataListener listener) {
         if (closed.get()) {
+            context.metrics().recordError(MqttAdapter.MSG_SESSION_CLOSED);
             return CompletableFuture.failedFuture(
                     new ProtocolException(MqttAdapter.MSG_SESSION_CLOSED, device.deviceId()));
         }
@@ -357,6 +363,10 @@ final class MqttSession implements DeviceSession {
         // 宿主需要知道这条数据具体来自哪个主题，而 '#'/'+' 过滤器本身不是有效主题
         byte[] payloadBytes = publish.getPayloadAsBytes();
         PointValue point = decode(topic, payloadBytes);
+        // 解码失败必须留下错误指标：否则「负载不是文本」只在数据面表现为 BAD，指标面完全静默
+        if (!point.isGood() && point.qualityReason() != null) {
+            recordDecodeFailure(point.qualityReason());
+        }
         subscription.delivered.incrementAndGet();
         context.metrics().recordSubscriptionBatch(1);
         if (subscription.listener != null) {
@@ -411,6 +421,25 @@ final class MqttSession implements DeviceSession {
                 }
                 return PointValue.good(PointAddress.of(topic),
                         new String(payloadBytes, StandardCharsets.UTF_8), now);
+            }
+        }
+    }
+
+    /**
+     * 把一次负载解码失败计入错误指标。
+     *
+     * <p>只统计白名单内的稳定错误码；未知原因不产生标签，避免维度基数失控。</p>
+     *
+     * @param reason 失败点位的质量原因（消息键）
+     */
+    private void recordDecodeFailure(String reason) {
+        switch (reason) {
+            case MqttAdapter.MSG_PAYLOAD_NOT_UTF8 ->
+                    context.metrics().recordError(MqttAdapter.MSG_PAYLOAD_NOT_UTF8);
+            case MqttAdapter.MSG_PAYLOAD_NOT_NUMBER ->
+                    context.metrics().recordError(MqttAdapter.MSG_PAYLOAD_NOT_NUMBER);
+            default -> {
+                // 未知原因不进标签：只统计文档承诺的稳定错误码
             }
         }
     }

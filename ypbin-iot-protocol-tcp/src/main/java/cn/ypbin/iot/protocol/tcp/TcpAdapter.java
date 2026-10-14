@@ -173,8 +173,10 @@ public final class TcpAdapter implements ProtocolAdapter {
         return transport.connect(spec, idleInterval)
                 .handle((connection, error) -> {
                     if (error != null) {
-                        // 必须带出**真实**原因：TLS 未实现、端点不可达、超时是不同的排查方向，
-                        // 一律折叠成 MSG_CONNECTION_INACTIVE 会把「配了未实现的 TLS」误读为网络问题
+                        // 指标维度用稳定协议码；ProbeResult 仍带出**真实**原因（TLS 未实现、端点
+                        // 不可达、超时是不同的排查方向，一律折叠成 MSG_CONNECTION_INACTIVE
+                        // 会把「配了未实现的 TLS」误读为网络问题）
+                        context.metrics().recordError(MSG_CONNECTION_INACTIVE);
                         return ProbeResult.unreachable(DESCRIPTOR,
                                 Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE));
                     }

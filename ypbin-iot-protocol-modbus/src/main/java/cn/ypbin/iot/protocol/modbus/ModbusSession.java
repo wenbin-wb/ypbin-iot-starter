@@ -112,7 +112,15 @@ final class ModbusSession implements DeviceSession {
         this.connection = connection;
         this.context = context;
         this.polling = polling;
-        this.unitId = parseUnitId(device, defaultUnitId);
+        int parsedUnitId;
+        try {
+            parsedUnitId = parseUnitId(device, defaultUnitId);
+        } catch (RuntimeException ex) {
+            // 从站地址是配置错误：建会话即失败，必须留下指标而不是只抛异常
+            context.metrics().recordError(ModbusAdapter.MSG_UNIT_ID_INVALID);
+            throw ex;
+        }
+        this.unitId = parsedUnitId;
         this.boundAt = context.clock().instant();
         this.sessionId = device.deviceId() + "@" + connection.connectionId() + "#" + unitId;
     }
@@ -198,14 +206,20 @@ final class ModbusSession implements DeviceSession {
             boolean hasConfiguredPoints = !parsed.isEmpty();
             if (hasConfiguredPoints && collected.values().stream().noneMatch(PointValue::isGood)
                     && !connection.state().isUsable()) {
+                context.metrics().recordError(ModbusAdapter.MSG_CONNECTION_INACTIVE);
                 throw new ProtocolException(ModbusAdapter.MSG_CONNECTION_INACTIVE, device.deviceId());
             }
             Instant finished = context.clock().instant();
             List<PointValue> values = new ArrayList<>(request.addresses().size());
             for (PointAddress address : request.addresses()) {
                 PointValue value = collected.get(address);
-                values.add(value != null ? value : PointValue.bad(address, Quality.BAD,
-                        ModbusAdapter.MSG_NO_RESULT, finished));
+                if (value != null) {
+                    values.add(value);
+                } else {
+                    context.metrics().recordError(ModbusAdapter.MSG_NO_RESULT);
+                    values.add(PointValue.bad(address, Quality.BAD,
+                            ModbusAdapter.MSG_NO_RESULT, finished));
+                }
             }
             Duration elapsed = Duration.between(started, finished);
             context.metrics().recordRead(elapsed, true);
@@ -359,10 +373,12 @@ final class ModbusSession implements DeviceSession {
             address = ModbusAddressCodec.parse(write.address().raw());
         } catch (RuntimeException ex) {
             statuses.add(PointWriteStatus.fail(write.address(), ModbusAdapter.MSG_ADDRESS_INVALID));
+            context.metrics().recordError(ModbusAdapter.MSG_ADDRESS_INVALID);
             return CompletableFuture.completedFuture(null);
         }
         if (!address.type().isWritable()) {
             statuses.add(PointWriteStatus.fail(write.address(), ModbusAdapter.MSG_NOT_WRITABLE));
+            context.metrics().recordError(ModbusAdapter.MSG_NOT_WRITABLE);
             return CompletableFuture.completedFuture(null);
         }
         int numeric;
@@ -370,6 +386,7 @@ final class ModbusSession implements DeviceSession {
             numeric = toNumeric(write.value());
         } catch (RuntimeException ex) {
             statuses.add(PointWriteStatus.fail(write.address(), ModbusAdapter.MSG_VALUE_INVALID));
+            context.metrics().recordError(ModbusAdapter.MSG_VALUE_INVALID);
             return CompletableFuture.completedFuture(null);
         }
         ModbusClient client = connection.client();
@@ -386,6 +403,7 @@ final class ModbusSession implements DeviceSession {
                 statuses.add(PointWriteStatus.ok(write.address()));
             } else {
                 statuses.add(PointWriteStatus.fail(write.address(), ModbusAdapter.MSG_WRITE_FAILED));
+                context.metrics().recordError(ModbusAdapter.MSG_WRITE_FAILED);
                 log.debug("[ypbin-iot] modbus write failed for device {} address {}: {}",
                         device.deviceId(), write.address().raw(), error.toString());
             }
@@ -434,6 +452,7 @@ final class ModbusSession implements DeviceSession {
     @Override
     public CompletionStage<SubscriptionHandle> subscribe(SubscribeRequest request, DataListener listener) {
         if (closed.get()) {
+            context.metrics().recordError(ModbusAdapter.MSG_SESSION_CLOSED);
             return CompletableFuture.failedFuture(
                     new ProtocolException(ModbusAdapter.MSG_SESSION_CLOSED, device.deviceId()));
         }
