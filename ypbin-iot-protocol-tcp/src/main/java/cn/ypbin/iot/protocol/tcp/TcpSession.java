@@ -194,9 +194,13 @@ public final class TcpSession implements DeviceSession {
             PointWrite write = writes.get(index);
             TcpPayloadCodec.Encoded encoded = TcpPayloadCodec.encode(write.value());
             if (!encoded.success()) {
-                statuses.add(PointWriteStatus.fail(write.address(), encoded.messageKey()));
+                // 与下面 payload 的断言同一理由：failure 与 messageKey 非空是配套的，
+                // 但类型系统表达不了 ⇒ 显式断言（NullAway 要求 @NonNull，且避免 NPE 隐式传播）
+                String messageKey = Objects.requireNonNull(encoded.messageKey(),
+                        "failed encoding must carry a message key");
+                statuses.add(PointWriteStatus.fail(write.address(), messageKey));
                 context.metrics().recordWrite(Duration.ZERO, false);
-                recordEncodeFailure(encoded.messageKey());
+                recordEncodeFailure(messageKey);
                 index++;
                 continue;
             }
