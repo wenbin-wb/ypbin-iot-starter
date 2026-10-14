@@ -26,6 +26,15 @@
   指标名/标签契约不变（`ypbin.iot.errors` + `type`）。回归用例 `METCFG-05/06/07` 用真实 Boot
   指标链构造上下文，修复前红、修复后绿；设计说明见 `docs/DESIGN.md` §3.7。
 
+- **协议层错误指标从不出现（issue #27）**：`MetricsRecorder#recordError` 在协议层无生产调用点，
+  文档承诺的 `iot.tcp.*` 等错误计数永远不会注册，宿主
+  `/actuator/metrics/ypbin.iot.errors` 恒 404（与指标桥是否修好无关）。修法：在 TCP / Modbus /
+  MQTT / OPC-UA 的失败路径上调用 `context.metrics().recordError(<既有 MSG_* 错误码>)`
+  （只加计数，不改返回值/状态语义；同一失败只计一次，未知原因不产生标签）。补 13 条真实路径
+  契约测试（`SimpleMeterRegistry`，触发一次 → `ypbin.iot.errors{type=<码>}` +1），并新增
+  `MetricsCallSiteGateTest` 双向门禁（`docs/METRICS.md` 错误码表 ↔ 协议层 `recordError` 调用点，
+  删掉任一调用点即红）；错误码清单见新增的 [`docs/METRICS.md`](docs/METRICS.md)。
+
 ## [0.3.0] - 2026-10-12
 
 ### 新增
