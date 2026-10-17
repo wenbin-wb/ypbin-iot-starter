@@ -55,6 +55,7 @@ import org.eclipse.milo.opcua.sdk.client.subscriptions.MonitoredItemServiceOpera
 import org.eclipse.milo.opcua.sdk.client.subscriptions.OpcUaMonitoredItem;
 import org.eclipse.milo.opcua.sdk.client.subscriptions.OpcUaSubscription;
 import org.eclipse.milo.opcua.stack.core.AttributeId;
+import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
@@ -231,8 +232,35 @@ final class OpcUaSession implements DeviceSession {
             return PointValue.bad(address, Quality.BAD, OpcUaAdapter.MSG_STATUS_BAD, now);
         }
         Instant sourceTime = dataValue.getSourceTime() == null ? now : dataValue.getSourceTime().getJavaInstant();
-        return PointValue.good(address, dataValue.getValue() == null ? null : dataValue.getValue().getValue(),
-                sourceTime);
+        Object raw = dataValue.getValue() == null ? null : dataValue.getValue().getValue();
+        PointValue point = PointValue.good(address, normalizeByteString(raw), sourceTime);
+        // ByteString 是「原始字节」交付路径：必须过宿主可插解码 SPI（issue #30），
+        // 否则宿主拿到的是 Milo 类型而不是 byte[]，解码器无从认领。
+        return point.value() instanceof byte[]
+                ? context.decodePayload(point, device.deviceId(), connection.connectionId())
+                : point;
+    }
+
+    /**
+     * 把 Milo 的 {@link ByteString} 归一为 {@code byte[]}（其余类型原样返回）。
+     *
+     * <p><b>为什么必须归一</b>：宿主解码 SPI（{@code BytePayloadDecoder}）的输入契约是
+     * {@code byte[]}；把 Milo 类型直接交给宿主等于让每个宿主都依赖 Milo 才能处理二进制节点。
+     * {@link ByteString#isNull()} 的「空值」不是空字节串语义（前者是 null，后者是长度为 0），
+     * 因此空值保持 {@code null} 值（BAD/无值语义由宿主按既有规则处理），不伪造空数组。</p>
+     *
+     * @param raw 协议库原始值
+     * @return {@code byte[]} 或原值
+     */
+    private static @Nullable Object normalizeByteString(@Nullable Object raw) {
+        if (!(raw instanceof ByteString byteString)) {
+            return raw;
+        }
+        // 直接判 bytes() 是否为 null 而不是先 isNull() 再解引用：Milo 把 bytes() 标注为 @Nullable，
+        // 分两步写会让 NullAway 在解引用点报「可能为 null」（isNull() 与 bytes() 的可空性
+        // 在类型系统里没有关联）。两者语义等价：null 值 ↔ 空字节串的区分保持不变。
+        byte[] bytes = byteString.bytes();
+        return bytes == null ? null : bytes.clone();
     }
 
     @Override

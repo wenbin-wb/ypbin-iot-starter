@@ -91,6 +91,26 @@
 | `iot.opcua.browse.unresolved` | 浏览结果无法解析为本地 NodeId | `OpcUaBrowser#browseLevel` |
 | `iot.opcua.browse.truncated` | 浏览达到节点数上限被截断 | `OpcUaBrowser#browse` |
 
+### 2.5 框架公共（`iot.common.*`）
+
+> 本节由**框架层**（`iot-core` 的 `BytePayloadDecoding`、`iot-runtime` 的
+> `BoundedBatchEgressQueue`）上报，不属于任何单个协议模块，因此**不参与** §3 的
+> 「表 ↔ 协议模块源码」双向门禁（该门禁按 `iot.<protocol>.*` 前缀分组，只覆盖四个协议模块）。
+> 这里的调用点由 `BytePayloadDecodingTest` / `BoundedBatchEgressQueueTest` 直接断言指标键。
+
+| 错误码（`type`） | 触发失败 | 上报位置 |
+|---|---|---|
+| `iot.common.payload.decoder.not-found` | 宿主注册了解码器但没有一个认领该点位（字节原样交付） | `BytePayloadDecoding#apply` |
+| `iot.common.payload.decode-failed.length-mismatch` | 字节长度与声明的解码规格不匹配 | `BytePayloadDecoding#invoke`（`DecodeFailure.LENGTH_MISMATCH`） |
+| `iot.common.payload.decode-failed.not-finite` | 解出的浮点为 NaN/±Inf | `BytePayloadDecoding#invoke`（`DecodeFailure.NOT_FINITE`） |
+| `iot.common.payload.decode-failed.invalid-value` | 字节串无法按声明规格解释 | `BytePayloadDecoding#invoke`（`DecodeFailure.INVALID_VALUE`） |
+| `iot.common.payload.decode-failed.config-missing` | 该点位没有可用解码配置 | `BytePayloadDecoding#invoke`（`DecodeFailure.CONFIG_MISSING`） |
+| `iot.common.payload.decode-failed.decoder-error` | 解码器抛异常或返回 null（实现缺陷） | `BytePayloadDecoding#invoke`（`DecodeFailure.DECODER_ERROR`） |
+| `iot.common.egress.dropped` | 有界出口队列已满或已关闭，元素被丢弃 | `BoundedBatchEgressQueue#recordDrop` |
+
+**失败原因码的来源是枚举**：`DecodeFailure` 的取值集合编译期有界，`messageKey()` 同时用作
+BAD 质量的 `qualityReason` 与指标标签 ⇒ 日志看到的键与指标标签永远一致，不会产生基数爆炸。
+
 ## 3. 机器门禁
 
 `ypbin-iot-architecture-tests` 的 `MetricsCallSiteGateTest` 双向断言本节错误码表与源码：

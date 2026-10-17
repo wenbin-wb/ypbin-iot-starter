@@ -396,8 +396,10 @@ final class MqttSession implements DeviceSession {
         MqttPayloadFormat format = payloadFormat == null ? MqttPayloadFormat.TEXT : payloadFormat;
         switch (format) {
             case BINARY -> {
-                // 原样交付字节：不做任何解码，宿主自行按业务协议解析
-                return PointValue.good(PointAddress.of(topic), payloadBytes.clone(), now);
+                // 原样交付字节，但先过宿主可插解码 SPI（issue #30）：
+                // 无解码器时行为与「没有本 SPI」逐字一致；认领后失败一律 BAD。
+                PointValue raw = PointValue.good(PointAddress.of(topic), payloadBytes.clone(), now);
+                return context.decodePayload(raw, device.deviceId(), connection.connectionId());
             }
             case NUMBER -> {
                 if (!MqttPayloadFormat.isValidUtf8(payloadBytes)) {

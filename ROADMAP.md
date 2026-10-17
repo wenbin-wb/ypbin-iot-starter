@@ -12,10 +12,13 @@
 
 - ✅ `ConnectionRegistry`（单飞 + 引用计数 + 空闲回收 + 建链限速）
 - ✅ `PollingSubscriptionManager`、`BoundedDeliveryDispatcher`、`EgressRouter`
+- ✅ 宿主侧通用出口缓冲 `BoundedBatchEgressQueue<T>`（有界 + 微批 + 丢弃可见 + 停机排空，issue #32）
 - ✅ Netty 传输底座与三种帧定界
 - ✅ **连接意外断开后的指数退避重连与重绑定**（含「可重复生效」「显式解绑取消」）
 - ✅ **宿主回调卸载出协议/IO 线程**（有界丢弃 + 计数）
 - ✅ 协议：TCP 透传、Modbus（TCP/RTU）、MQTT 3.1.1、OPC UA（含安全策略与认证）
+- ✅ 二进制载荷解码扩展点 `BytePayloadDecoder`（宿主 `@Bean` 即接入，issue #30）
+- ✅ Modbus 寄存器词法解码工具 `ModbusRegisterDecoder`（issue #31）
 - ✅ OPC UA **签名加密会话端到端可用**（`Basic256Sha256` + `SignAndEncrypt`）
 
 ## M1.x · 工程化对齐（🚧）

@@ -3,12 +3,47 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)：`主版本.次版本.修订号`。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-当前开发版：`0.3.1-SNAPSHOT`。
+当前开发版：`0.3.4-SNAPSHOT`。
 
 已发布：**`0.1.0`（2026-09-21）**、**`0.2.0`（2026-09-29）** 与 **`0.3.0`（2026-10-12）**，均已发布到 Maven Central；
 其中 `0.1.0` 由 `ypbin-access` 作为首个真实宿主接入验证。
 
 ## [未发布]
+
+### 新增
+
+- **宿主可插字节载荷解码 SPI（issue #30）**：二进制交付路径（TCP `payload-format=binary`、MQTT
+  `payload-format=binary`、OPC UA `ByteString`）此前只能把原始字节交给宿主，框架没有统一扩展点，
+  宿主被迫各自造一套 `BytePayloadDecoder` + 注册机（换宿主就重写一遍，失败信号也各写各的）。
+  现在 `iot-core` 定义 SPI（`BytePayloadDecoder` / `DecodeContext` / `DecodeOutcome` /
+  `DecodeFailure` / `BytePayloadDecoderRegistry`）与路由门面 `BytePayloadDecoding`，
+  `iot-runtime` 提供 `DefaultBytePayloadDecoderRegistry`，starter 收集宿主 `@Bean BytePayloadDecoder`
+  并按 `@Order` 选择第一个认领者、注入每个 `AdapterContext`；协议模块在交付字节前调
+  `context.decodePayload(...)` 一行接入。行为矩阵：**空注册表 = 与没有本 SPI 逐字一致**（不加计数）；
+  非空但未认领 → 原样交付 + `iot.common.payload.decoder.not-found`；认领后失败/解码器抛异常 →
+  **BAD** + `iot.common.payload.decode-failed.<原因>`（绝不把垃圾字节当 GOOD）。
+  OPC UA 另把 Milo `ByteString` 归一为 `byte[]`（宿主解码器不再被迫依赖 Milo）。
+  测试：`BytePayloadDecodingTest`（BPD-01~12）、`DefaultBytePayloadDecoderRegistryTest`
+  （BPR-01~10）、`BytePayloadDecoderAssemblyTest`（BPA-01~05）、`MqttBytePayloadDecodingTest`
+  （MBPD-01~03）、`TcpBytePayloadDecodingTest`（TBPD-01~02）、`OpcUaBytePayloadDecodingTest`
+  （OBPD-01~04）；契约见 [`docs/SPI.md`](docs/SPI.md) §9。
+
+- **Modbus 寄存器词法解码工具 `ModbusRegisterDecoder`（issue #31）**：把宿主自建的纯算术解码下沉到
+  `ypbin-iot-protocol-modbus`——单寄存器 16 位（有/无符号）、双寄存器 32 位（ABCD/CDAB 字序）、
+  IEEE754 单/双精度、多寄存器严格 UTF-8（去尾部 NUL、保留中间 NUL）、位域，全部零 IO、无状态、
+  无外部依赖。字序口径与宿主历史实现一致（`big`=高字在前、`little`=低字在前/整体翻转），
+  不支持 BADC 等字内字节交换（属于设备方言）。测试：`ModbusRegisterDecoderTest` MRD-01~14
+  （含 8 组经典字序矩阵与边界），下游可直接以该测试作为迁移对照表。
+
+- **有界微批出口队列 `BoundedBatchEgressQueue<T>`（issue #32）**：在 `iot-runtime` 沉淀流式采集
+  缓冲出口的通用基座——`offer` 用 `ArrayBlockingQueue#offer` **绝不阻塞协议线程**，队满/已关闭
+  返回 `false` 并计数、上报 `iot.common.egress.dropped`、限流 WARN；单平台 daemon 线程按
+  `batchSize` + `flushInterval` 微批消费；Sink 抛异常只损失本批（ERROR 全堆栈 + 失败计数，
+  线程继续）；`close()` 有界等待后把剩余元素按批循环 flush（不静默丢在内存里），
+  消费线程卡死时不并发调 Sink。宿主只需实现 `BatchEgressSink<T>`（写 HTTP / 发 Kafka / 批量落库），
+  缓冲、并发、丢弃可见性与停机排空由基座兜底。测试 `BoundedBatchEgressQueueTest` BEG-01~10
+  （切批不丢、时间窗口、队列满计数、关闭 flush/drain、故障隔离、并发不丢不重、fail-fast、
+  gauge 上报、卡死 Sink 的有界等待）。
 
 ### 修复
 

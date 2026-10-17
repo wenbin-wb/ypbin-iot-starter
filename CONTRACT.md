@@ -4,8 +4,8 @@
 
 ## 一、版本语义
 
-遵循语义化版本。当前开发版 `0.2.1-SNAPSHOT`；已发布 **`0.1.0`（2026-09-21）** 与
-**`0.2.0`（2026-09-29）**。也就是说，本仓仍处于 `0.x` 阶段，**不提供跨版本兼容性保证**；
+遵循语义化版本。当前开发版 `0.3.4-SNAPSHOT`；已发布 **`0.1.0`（2026-09-21）**、
+**`0.2.0`（2026-09-29）** 与 **`0.3.0`（2026-10-12）**。也就是说，本仓仍处于 `0.x` 阶段，**不提供跨版本兼容性保证**；
 `1.0.0` 之前的 API 可能随时变更（现行版本以根 `pom.xml` 的 `<revision>` 与 `CHANGELOG.md` 为准）。
 
 ## 二、稳定面（SPI）
@@ -62,6 +62,15 @@
    测试：`TcpSessionBehaviourTest#keyValueFrameMustServeMultiplePoints`（TCP-12）、
    `#missingSelectorMustYieldBadPointOnly`（TCP-13）、`#invalidSelectorMustFailFastOnSubscribe`（TCP-14）、
    `#subscribeWithMultipleAddressesMustFailFast`（TCP-11，非 key-value 回归）。
+9. **二进制载荷的解码扩展点（issue #30）**：TCP/MQTT 的 `payload-format=binary` 与 OPC UA
+   `ByteString` 交付给宿主前，都会经过宿主可插解码 SPI（`BytePayloadDecoder`）。
+   **未注册任何解码器时行为与「没有本 SPI」逐字一致**（`byte[]` 原样交付、不产生错误计数）；
+   注册后未认领只计数 `iot.common.payload.decoder.not-found` 并原样交付；认领后解码失败或解码器
+   抛异常一律产出 **BAD** + `iot.common.payload.decode-failed.<原因>`，绝不把原始字节当 GOOD 交付。
+   OPC UA 的 Milo `ByteString` 在调用 SPI 前已归一为 `byte[]`（宿主解码器无需依赖 Milo）。
+   测试：`BytePayloadDecodingTest`（BPD-01~12）、`BytePayloadDecoderAssemblyTest`（BPA-01~05）、
+   `MqttBytePayloadDecodingTest`（MBPD-01~03）、`TcpBytePayloadDecodingTest`（TBPD-01~02）、
+   `OpcUaBytePayloadDecodingTest`（OBPD-01~04）。
 
 ## 五、明确不做的（有意为之，不是缺陷）
 

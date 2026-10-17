@@ -22,6 +22,8 @@ import cn.ypbin.iot.core.context.MetricsRecorder;
 import cn.ypbin.iot.core.context.TaskScheduler;
 import cn.ypbin.iot.core.protocol.ProtocolAdapter;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import cn.ypbin.iot.core.spi.BytePayloadDecoder;
+import cn.ypbin.iot.core.spi.BytePayloadDecoderRegistry;
 import cn.ypbin.iot.core.spi.ConnectionSpecProvider;
 import cn.ypbin.iot.core.spi.DataSink;
 import cn.ypbin.iot.core.spi.DeviceEventListener;
@@ -34,6 +36,7 @@ import cn.ypbin.iot.runtime.delivery.BoundedDeliveryDispatcher;
 import cn.ypbin.iot.runtime.egress.EgressRouter;
 import cn.ypbin.iot.runtime.registry.AdapterRegistry;
 import cn.ypbin.iot.runtime.registry.ConnectionRegistry;
+import cn.ypbin.iot.runtime.registry.DefaultBytePayloadDecoderRegistry;
 import cn.ypbin.iot.runtime.scheduler.DefaultTaskScheduler;
 import java.time.Clock;
 import java.util.LinkedHashMap;
@@ -192,6 +195,37 @@ public class IotAutoConfiguration {
     }
 
     /**
+     * 字节载荷解码器注册表：收集宿主的 {@link BytePayloadDecoder} Bean 并按确定顺序选择
+     * （issue #30）。
+     *
+     * <p><b>空注册表是合法状态</b>：宿主不注册任何解码器时，二进制载荷照旧以 {@code byte[]}
+     * 交付（与「没有本 SPI」逐字一致），不会因为多了这个 Bean 而改变既有行为。</p>
+     *
+     * <p><b>顺序</b>：直接用 {@code orderedStream()} —— 它会读取 {@code @Order}/{@code Ordered}
+     * （包括 {@code @Bean} 方法上的注解）并按序返回；同序时保持 Spring 的确定性 Bean 注册顺序。
+     * <b>不能再拿解码器实例做二次排序</b>：{@code @Order} 写在 {@code @Bean} 方法上时，
+     * 实例本身不带顺序元数据，二次比较会把它当作「同序」从而打乱 {@code orderedStream()} 的结果
+     * （本仓实测踩过：{@code @Order(1)} 的解码器被排到了 {@code @Order(2)} 后面）。</p>
+     *
+     * @param decoders 宿主声明的解码器
+     * @return 解码器注册表（恒非空）
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public BytePayloadDecoderRegistry iotBytePayloadDecoderRegistry(
+            ObjectProvider<BytePayloadDecoder> decoders) {
+        List<BytePayloadDecoder> ordered = decoders.orderedStream().toList();
+        if (ordered.isEmpty()) {
+            log.debug("[ypbin-iot] no BytePayloadDecoder bean registered; "
+                    + "binary payloads are delivered as byte[] unchanged.");
+        } else {
+            log.debug("[ypbin-iot] iotBytePayloadDecoderRegistry configured with {} decoder(s): {}.",
+                    ordered.size(), ordered.stream().map(BytePayloadDecoder::id).toList());
+        }
+        return new DefaultBytePayloadDecoderRegistry(ordered);
+    }
+
+    /**
      * 适配器注册中心：收集全部适配器 Bean 并做启动期 fail-fast 校验。
      *
      * <p>校验失败<b>终止启动</b>而非 warn：协议 code 冲突或版本不兼容会让运行期行为不可预测。</p>
@@ -203,13 +237,15 @@ public class IotAutoConfiguration {
      * @param metrics    指标门面
      * @param credentials 凭据解析器
      * @param clock      时钟
+     * @param payloadDecoders 宿主字节载荷解码器注册表
      * @return 适配器注册中心
      */
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     public AdapterRegistry iotAdapterRegistry(IotProperties properties,
             ObjectProvider<ProtocolAdapter> adapters, DataEgress egress, TaskScheduler scheduler,
-            MetricsRecorder metrics, CredentialResolver credentials, Clock clock) {
+            MetricsRecorder metrics, CredentialResolver credentials, Clock clock,
+            BytePayloadDecoderRegistry payloadDecoders) {
         List<ProtocolAdapter> adapterList = adapters.orderedStream().toList();
         Map<ProtocolCode, AdapterContext> contexts = new LinkedHashMap<>();
         for (ProtocolAdapter adapter : adapterList) {
@@ -227,7 +263,7 @@ public class IotAutoConfiguration {
                     protocolProperties.maxPendingRequests(),
                     protocolProperties.extended());
             contexts.put(code, new DefaultAdapterContext(code, settings, egress, scheduler, metrics,
-                    credentials, clock, protocolProperties.addressCacheSize()));
+                    credentials, clock, protocolProperties.addressCacheSize(), payloadDecoders));
         }
         AdapterRegistry registry = new AdapterRegistry(adapterList, contexts);
         log.debug("[ypbin-iot] iotAdapterRegistry configured with {} adapter(s).", adapterList.size());

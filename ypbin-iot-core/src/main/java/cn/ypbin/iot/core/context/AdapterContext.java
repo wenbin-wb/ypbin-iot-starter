@@ -15,7 +15,10 @@
  */
 package cn.ypbin.iot.core.context;
 
+import cn.ypbin.iot.core.model.PointValue;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import cn.ypbin.iot.core.spi.BytePayloadDecoderRegistry;
+import cn.ypbin.iot.core.spi.BytePayloadDecoding;
 import java.time.Clock;
 
 /**
@@ -121,6 +124,46 @@ public interface AdapterContext {
      * @return 有界地址缓存
      */
     <A> BoundedAddressCache<A> addressCache(String namespace, int maximumSize);
+
+    /**
+     * 宿主可插字节载荷解码器注册表（issue #30）。
+     *
+     * <p>协议模块在<b>交付 {@code byte[]} 给宿主之前</b>必须调用
+     * {@link #decodePayload(PointValue, String, String)}，由框架按注册表路由解码；
+     * 不得自行判断「要不要解码」或自行遍历宿主 Bean（那会让选择逻辑散落成多处）。</p>
+     *
+     * <p>默认返回空注册表：不实现本方法的第三方 {@code AdapterContext} 仍可正常工作
+     * （行为与「没有本 SPI」逐字一致），不会因为新增扩展点而编译不过。</p>
+     *
+     * @return 解码器注册表（恒非空）
+     */
+    default BytePayloadDecoderRegistry payloadDecoders() {
+        return BytePayloadDecoderRegistry.empty();
+    }
+
+    /**
+     * 把点位值里的原始字节按注册表解码成规范值（协议模块交付二进制前的统一入口）。
+     *
+     * <pre>{@code
+     * PointValue point = PointValue.good(address, payload.clone(), now);
+     * context.egress().emit(new DataBatch(deviceId, protocol(), connectionId, now,
+     *         List.of(context.decodePayload(point, deviceId, connectionId))));
+     * }</pre>
+     *
+     * <p>行为矩阵（无解码器 / 未认领 / 解码失败 / 解码器抛异常 / 成功）见
+     * {@link BytePayloadDecoding} 的类注释；失败一律产出 <b>BAD</b> 并计入指标，
+     * 绝不存在「静默丢弃」或「把字节当 GOOD 交给宿主」。协议模块解析不了的点位由宿主按 BAD 处理
+     * （宿主自己的出口闸门仍是最后一道防线）。</p>
+     *
+     * @param value        协议层产出的点位值（非空）
+     * @param deviceId     设备标识（非空）
+     * @param connectionId 链路标识（可空）
+     * @return 解码后的点位值；不适用时返回入参本身
+     */
+    default PointValue decodePayload(PointValue value, String deviceId, String connectionId) {
+        return BytePayloadDecoding.apply(value, deviceId, protocol(), connectionId,
+                payloadDecoders(), metrics());
+    }
 
     /**
      * 记录一条适配器级结构化日志事件。

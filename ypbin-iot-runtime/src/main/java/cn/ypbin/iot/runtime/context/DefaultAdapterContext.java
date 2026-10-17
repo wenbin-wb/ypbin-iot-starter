@@ -26,12 +26,14 @@ import cn.ypbin.iot.core.context.MetricsRecorder;
 import cn.ypbin.iot.core.context.ResourceRegistry;
 import cn.ypbin.iot.core.context.TaskScheduler;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import cn.ypbin.iot.core.spi.BytePayloadDecoderRegistry;
 import cn.ypbin.iot.runtime.delivery.BoundedDeliveryDispatcher;
 import cn.ypbin.iot.runtime.util.LruAddressCache;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,8 +73,11 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
 
     private final int defaultAddressCacheSize;
 
+    /** 宿主字节载荷解码器注册表（issue #30）；为空注册表时行为与没有本 SPI 逐字一致。 */
+    private final BytePayloadDecoderRegistry payloadDecoders;
+
     /**
-     * 创建上下文。
+     * 创建上下文（不启用字节载荷解码 SPI，等价于空注册表）。
      *
      * @param protocol                协议标识
      * @param settings                适配器配置
@@ -86,6 +91,26 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
     public DefaultAdapterContext(ProtocolCode protocol, AdapterSettings settings, DataEgress egress,
             TaskScheduler scheduler, MetricsRecorder metrics, CredentialResolver credentials, Clock clock,
             int defaultAddressCacheSize) {
+        this(protocol, settings, egress, scheduler, metrics, credentials, clock, defaultAddressCacheSize,
+                BytePayloadDecoderRegistry.empty());
+    }
+
+    /**
+     * 创建上下文。
+     *
+     * @param protocol                协议标识
+     * @param settings                适配器配置
+     * @param egress                  数据出口
+     * @param scheduler               调度器
+     * @param metrics                 指标门面
+     * @param credentials             凭据解析器
+     * @param clock                   时钟
+     * @param defaultAddressCacheSize 地址缓存默认容量
+     * @param payloadDecoders         宿主字节载荷解码器注册表（可空 ⇒ 空注册表）
+     */
+    public DefaultAdapterContext(ProtocolCode protocol, AdapterSettings settings, DataEgress egress,
+            TaskScheduler scheduler, MetricsRecorder metrics, CredentialResolver credentials, Clock clock,
+            int defaultAddressCacheSize, @Nullable BytePayloadDecoderRegistry payloadDecoders) {
         this.protocol = Objects.requireNonNull(protocol, "protocol must not be null");
         this.settings = Objects.requireNonNull(settings, "settings must not be null");
         this.egress = Objects.requireNonNull(egress, "egress must not be null");
@@ -97,6 +122,8 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
         this.resources = new DefaultResourceRegistry();
         this.defaultAddressCacheSize = defaultAddressCacheSize <= 0 ? 4096 : defaultAddressCacheSize;
+        this.payloadDecoders = payloadDecoders == null
+                ? BytePayloadDecoderRegistry.empty() : payloadDecoders;
     }
 
     @Override
@@ -132,6 +159,11 @@ public final class DefaultAdapterContext implements AdapterContext, AutoCloseabl
     @Override
     public MetricsRecorder metrics() {
         return metrics;
+    }
+
+    @Override
+    public BytePayloadDecoderRegistry payloadDecoders() {
+        return payloadDecoders;
     }
 
     @Override

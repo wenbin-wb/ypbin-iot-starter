@@ -760,6 +760,32 @@ emit(PointValue)
 
 **三种策略都累加 `iot_egress_dropped_total` 指标并输出限流日志**——丢弃可以，静默丢弃不行。
 
+#### 4.5.1 宿主的「自有出口缓冲」用 `BoundedBatchEgressQueue<T>`（issue #32）
+
+`EgressRouter` 是**框架侧**出口：它把 `DataBatch` 交给 `DataSink`，解决的是「协议线程不被宿主
+Sink 拖死」。但很多宿主在 Sink 之后还有一段**自己的**通路（HTTP 上报、Kafka 生产、批量落库），
+那段同样需要「有界缓冲 + 微批 + 丢弃可见 + 停机排空」——此前每个宿主都在业务仓自己搭一套
+（`ypbin-access` 的 `HttpAccessReadingSink` 就是一例）。
+
+本仓在 `iot-runtime` 提供可复用的基座 `BoundedBatchEgressQueue<T>`：
+
+```
+宿主协议回调 ──offer()──► 有界队列（禁止阻塞，队满即丢 + 计数）──► 单消费线程
+                                                                   └─ batchSize / flushInterval 微批
+                                                                       └─ BatchEgressSink.accept(batch)
+```
+
+| 关注点 | 契约 |
+|---|---|
+| 入队 | **绝不阻塞**；队满/已关闭返回 `false`，累加丢弃计数 + `iot.common.egress.dropped` 指标 + 限流 WARN |
+| 消费 | 单平台 daemon 线程；按 `batchSize` 切批、`flushInterval` 到期即送（兼具吞吐与延迟） |
+| 故障隔离 | Sink 抛 `RuntimeException` 只损失本批（ERROR 全堆栈 + 失败计数），线程继续；**不重投**（重试属 Sink 职责） |
+| 停机 | `close()` 有界等待消费线程退出 → 剩余元素按批循环 flush；线程卡死时**不并发**调 Sink，只记 WARN 与剩余数 |
+| 溢出策略 | **只有「丢新」**：采集数据「保最新 vs 保完整」是业务语义，由宿主在 Sink 侧决定，基座只保证不阻塞、不静默 |
+
+> 与 `EgressRouter` 的分工：`EgressRouter` 属于**框架数据面**（一类数据出口，面向 `DataSink`）；
+> `BoundedBatchEgressQueue` 是**宿主侧通用缓冲原语**，不绑定 `DataBatch`，任何元素类型都可用。
+
 ---
 
 ## 5. 千万级并发的关键技术点
