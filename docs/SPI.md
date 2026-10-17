@@ -92,7 +92,12 @@ cn.ypbin.iot.core
 │   ├── DeviceRegistry                设备来源（启动期全量加载 + 运行期变更推送）
 │   ├── ConnectionSpecProvider        链路规格来源（按 connectionId 取建链参数）
 │   ├── ValidationResult              设备配置校验结果（record）
-│   └── DeviceChange / ChangeType     设备配置变更事件（含 revision，保幂等）
+│   ├── DeviceChange / ChangeType     设备配置变更事件（含 revision，保幂等）
+│   ├── BytePayloadDecoder            ★ 宿主可插字节载荷解码器（二进制点位扩展点）
+│   ├── BytePayloadDecoderRegistry    解码器注册表（选择第一个认领者；空表=不改行为）
+│   ├── BytePayloadDecoding           解码路由门面（AdapterContext#decodePayload 的实现）
+│   ├── DecodeContext / DecodeOutcome 解码输入上下文 / 成功-失败二选一结果
+│   └── DecodeFailure                 解码失败原因（有界枚举，指标标签来源）
 ├── i18n/                            ← 消息键常量（纯 String，零依赖）
 │   └── IotMessageKeys                iot.<protocol>.<category>.<detail>
 └── exception/                       ← 异常体系（全部 unchecked，携带 messageKey）
@@ -1775,7 +1780,7 @@ DeviceRegistry.loadAll()                    → 得到设备清单（deviceId + 
 
 ---
 
-## 9. 一个完整的最小协议实现（参考样例）
+## 10. 一个完整的最小协议实现（参考样例）
 
 下面是一个「通用 TCP 透传」协议适配器的完整实现骨架，用于说明**新增协议到底要写多少代码**：
 
@@ -1822,3 +1827,126 @@ public final class TcpPassthroughAdapter extends BlockingProtocolAdapter {
 **结论**：一个「一设备一链路、无需地址解析」的协议，实现量约 30 行；
 需要地址解析与链路复用的协议（Modbus、S7、BACnet）约 300~600 行；
 需要 SIP 信令与媒体处理的协议（GB28181）则需要独立子系统，但仍通过同一个 `ProtocolAdapter` 接入。
+
+---
+
+## 9. 字节载荷解码 SPI（宿主可插，issue #30）
+
+### 9.1 为什么需要它
+
+本仓有若干「原始字节」交付路径：TCP `payload-format=binary`（默认）、MQTT
+`payload-format=binary`、OPC UA `ByteString` 节点。它们的承诺是**原样交付字节**——
+私有帧格式属于业务协议，框架不猜。此前框架**没有**统一扩展点，宿主只能各自造一套
+SPI + 注册机：换个宿主就重写一遍，且「没认领就丢弃」的失败信号也各写各的。
+
+本 SPI 把这层收进 `iot-core`（零 Spring），由 starter 自动装配：
+
+| 层 | 职责 |
+|---|---|
+| `iot-core` | 定义 `BytePayloadDecoder` / `DecodeContext` / `DecodeOutcome` / `DecodeFailure` / `BytePayloadDecoderRegistry`（纯接口）与路由门面 `BytePayloadDecoding` |
+| `iot-runtime` | `DefaultBytePayloadDecoderRegistry`（持有预排序列表、去重、顺序遍历） |
+| `iot-spring-boot-starter` | 收集 `@Bean BytePayloadDecoder` → 注册表 Bean；注入每个 `AdapterContext` |
+| 协议模块 | 二进制交付前调 `context.decodePayload(point, deviceId, connectionId)` 一行 |
+
+### 9.2 接口
+
+```java
+package cn.ypbin.iot.core.spi;
+
+public interface BytePayloadDecoder {
+
+    /** 稳定标识（日志/排障/同序排序），取值有界，不得含设备 ID 等高频变化内容。 */
+    String id();
+
+    /** 是否认领该点位：只做判定，不做解码、不抛异常、非阻塞。 */
+    boolean supports(DecodeContext context);
+
+    /** 纯解码：字节 → 平台规范值；失败必须返回 DecodeOutcome.failed(...)，不得返回 null。 */
+    DecodeOutcome decode(byte[] payload, DecodeContext context);
+}
+
+/** 点位/设备上下文：deviceId + protocol + rawAddress + connectionId。 */
+public record DecodeContext(String deviceId, ProtocolCode protocol, String rawAddress,
+                            @Nullable String connectionId) { }
+
+/** 成功带值、失败带原因，二者互斥且必有其一（紧凑构造器强制）。 */
+public record DecodeOutcome(@Nullable Object value, @Nullable DecodeFailure failure) {
+    public static DecodeOutcome ok(Object value);
+    public static DecodeOutcome failed(DecodeFailure failure);
+    public boolean success();
+}
+
+/** 有界失败原因：LENGTH_MISMATCH / NOT_FINITE / INVALID_VALUE / CONFIG_MISSING / DECODER_ERROR。 */
+public enum DecodeFailure { /* code + detail + desc + messageKey() + fromCode(int) */ }
+```
+
+### 9.3 行为矩阵（**冻结**，测试 `BytePayloadDecodingTest` BPD-01~13）
+
+| 场景 | 返回 | 指标 `ypbin.iot.errors{type=…}` |
+|---|---|---|
+| 值不是 GOOD / 不是 `byte[]` | 原值（不改写） | 无 |
+| **注册表为空**（宿主没注册解码器） | 原值（`byte[]` 照旧交付） | **无**（行为与「没有本 SPI」逐字一致） |
+| 注册表非空但**无解码器认领** | 原值（`byte[]` 照旧交付） | `iot.common.payload.decoder.not-found` |
+| 认领后**解码失败** | **BAD** + `qualityReason=iot.common.payload.decode-failed.<detail>` | 同键 |
+| 解码器 `decode()` **抛异常 / 返回 null** | **BAD** + `decoder-error`（不向协议线程逃逸） | `…decode-failed.decoder-error` |
+| 解码器 `supports()` **抛异常** | **BAD** + `decoder-error`（同上；MQTT/OPC UA 的回调栈无传输层兜底） | `…decode-failed.decoder-error` |
+| **解码成功** | GOOD + 规范值（保留原地址与源时间戳） | 无 |
+
+**顺序契约**：注册表按 starter 的 `ObjectProvider#orderedStream()`（即 `@Order`/`Ordered`，
+含 `@Bean` 方法上的注解）取**第一个**认领者。**同序**（都没标或标了相同值）时按 Spring 的
+Bean 注册顺序，框架**不做**二次排序。
+⚠️ 不要在实例上再用 `id()` 之类的键二次排序——`@Bean` 方法上的 `@Order` 不属于实例元数据，
+二次比较会把它们当成同序而打乱 `orderedStream()` 的结果（本仓实测踩过，用例 `BPA-03` 钉死）。
+需要确定顺序的宿主请用 `@Order`/`Ordered`，不要依赖 `id()` 字典序。
+
+### 9.4 宿主用法（最小可运行）
+
+```java
+@Configuration
+class MyDecodeConfiguration {
+
+    /** 把 2 字节大端无符号整数解成 Integer；只认自己的主题前缀。 */
+    @Bean
+    BytePayloadDecoder myTopicDecoder() {
+        return new BytePayloadDecoder() {
+            @Override public String id() { return "my-topic-uint16"; }
+            @Override public boolean supports(DecodeContext ctx) {
+                return ctx.rawAddress().startsWith("plant/line1/")
+                        && ctx.protocol().value().equals("mqtt");
+            }
+            @Override public DecodeOutcome decode(byte[] payload, DecodeContext ctx) {
+                if (payload.length != 2) {
+                    return DecodeOutcome.failed(DecodeFailure.LENGTH_MISMATCH);
+                }
+                return DecodeOutcome.ok(((payload[0] & 0xFF) << 8) | (payload[1] & 0xFF));
+            }
+        };
+    }
+}
+```
+
+配套配置（启用 MQTT binary 交付，解码由上面的 Bean 承接）：
+
+```yaml
+ypbin:
+  iot:
+    protocol:
+      mqtt:
+        payload-format: binary
+```
+
+**边界**：解码器只做「字节 → 规范值」。**不做**物模型类型转换、不做缩放/偏移、不落库——
+那些属于宿主业务语义（见 `docs/DESIGN.md` §5.4 与宿主 `VALUE-DECODE-DESIGN.md`）。
+
+### 9.5 OPC UA `ByteString` 的归一
+
+Milo 的 `ByteString` 是协议库类型（record），不是 `byte[]`。`OpcUaSession` 在调用解码 SPI
+**之前**把它归一为 `byte[]`（`ByteString#isNull()` 保持 `null`，不伪造空数组），
+因此宿主解码器永远只面对 `byte[]`、无需依赖 Milo。**空值语义**：`ByteString` 的 null 值
+（`ByteString.NULL_VALUE` / `bytes()==null`）交付为 `null`，**不**伪造成空数组——「没有值」与
+「值是空字节串」是两回事。证据用例 `OpcUaBytePayloadDecodingTest` OBPD-01~06
+（read、原生订阅、null 值、`supports()` 抛异常四条边界）。
+
+**兼容性说明（重要）**：OPC UA 的 `ByteString` 节点在**本版本之前**原样交付 Milo 的
+`ByteString` 对象；**现在无论是否注册解码器都交付 `byte[]`**。按旧类型消费该点的宿主会
+`ClassCastException`，迁移方式见 `CHANGELOG.md` 的「破坏性变更」小节。

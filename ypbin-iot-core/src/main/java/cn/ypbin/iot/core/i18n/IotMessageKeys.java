@@ -45,6 +45,15 @@ public final class IotMessageKeys {
     /** 能力类消息前缀。 */
     public static final String CAPABILITY_PREFIX = "iot.common.capability.";
 
+    /** 字节载荷解码失败类消息前缀：后接 {@code DecodeFailure} 的稳定细节标识。 */
+    public static final String PAYLOAD_DECODE_FAILED_PREFIX = "iot.common.payload.decode-failed.";
+
+    /** 字节载荷没有解码器认领（原样交付字节；显式计数，不静默）。 */
+    public static final String PAYLOAD_DECODER_NOT_FOUND = "iot.common.payload.decoder.not-found";
+
+    /** 出口队列丢弃（有界队列满或已关闭）。 */
+    public static final String EGRESS_DROPPED = "iot.common.egress.dropped";
+
     /** 建链超时。 */
     public static final String CONNECTION_TIMEOUT = CONNECTION_PREFIX + "timeout";
 

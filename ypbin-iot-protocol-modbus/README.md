@@ -84,6 +84,42 @@ ypbin:
 
 ---
 
+## 寄存器解码工具（`ModbusRegisterDecoder`，issue #31）
+
+协议层交付的是**16 位无符号**寄存器原始值（`0..65535`）。把多个寄存器组合成规范值的算术
+（符号扩展、字序、IEEE754、UTF-8 拼接）由本模块提供的**纯函数工具**承担——
+零 IO、无状态、无外部依赖，宿主直接静态调用：
+
+```java
+import cn.ypbin.iot.protocol.modbus.ModbusRegisterDecoder;
+
+int  u16 = ModbusRegisterDecoder.decodeSingle(raw, false);          // 0..65535 原样
+int  s16 = ModbusRegisterDecoder.decodeSingle(raw, true);           // -32768..32767（符号扩展）
+long u32 = ModbusRegisterDecoder.decodeInt32(r0, r1, "big", false);// 0..2^32-1（long 承载，不截断）
+long s32 = ModbusRegisterDecoder.decodeInt32(r0, r1, "little", true); // CDAB 字序 + 符号
+float f  = ModbusRegisterDecoder.decodeFloatBits(r0, r1, "big");    // IEEE754 单精度
+double d = ModbusRegisterDecoder.decodeDoubleBits(words4, "big");   // IEEE754 双精度
+String t = ModbusRegisterDecoder.decodeStringUtf8(words);            // 严格 UTF-8，去尾部 NUL
+Object b = ModbusRegisterDecoder.decodeBits(raw, 3, 4);             // 位域（无符号）
+```
+
+**字序口径（冻结）**：`big`（或未声明）= 高字在前（ABCD / ABCD）；`little` = 低字在前
+（CDAB / DCBA 整体翻转）。**不支持** BADC 等「字内字节交换」的中间排列——那属于设备方言，
+需要时由宿主自行按点位声明并处理。
+
+**失败语义**：非法输入（双精度寄存器数≠4、位域越界）抛 `IllegalArgumentException`；
+UTF-8 非法抛 `CharacterCodingException`；NaN/±Inf 原样返回（是否拒绝由宿主业务决定）。
+是否把点位标 BAD、是否落库，都由宿主决定——本工具只做算术。
+
+> 完整字序矩阵与边界回归见 `ModbusRegisterDecoderTest`（MRD-01~14），可直接作为
+> 「宿主历史实现迁移到本工具」的对照表。
+>
+> **边界声明**：协议适配器自身（`ModbusSession`）仍按原样交付 16 位无符号寄存器值——
+> 本工具是给**宿主**用的纯函数，框架不替宿主决定位宽/符号/字序（那些属于点位映射与物模型语义）。
+> 因此本仓内没有它的生产调用方，宿主的实际接入需自行验证。
+
+---
+
 ## 协议特有坑
 
 1. **地址基准是头号坑**：读到值但整体偏移一位，几乎总是 `1-based`/`0-based` 混用。用 `type:offset` 显式写法可完全避免。
@@ -91,7 +127,8 @@ ypbin:
    **务必让同一网关下的设备共享 `connectionId`**（框架会复用链路，不会为每个从站重复建连）。
 3. **单次读上限是协议硬约束**：寄存器 125、线圈 2000。超限设备直接返回异常码，框架已自动分块。
 4. **线圈是「一位一个线圈」的位打包字节**，不是布尔数组；适配器已按低位在前解位。
-5. **寄存器是 16 位无符号**：`0xFFFF` 读出来是 `65535` 而不是 `-1`。需要 32 位（双寄存器）语义时由宿主侧组合。
+5. **寄存器是 16 位无符号**：`0xFFFF` 读出来是 `65535` 而不是 `-1`。需要 32 位（双寄存器）语义时用
+   `ModbusRegisterDecoder.decodeInt32/decodeFloatBits`（见上节），不要自己写移位。
 6. **RTU 需要串口独占**：同一条串口上的请求不能并发（RS-485 半双工）。串口参数（`baud`）走端点查询串，
    **不做默认值猜测**——猜错的表现是「偶尔能通」。
 7. **保活是必需的**：Modbus 没有心跳，对端静默断开不会产生任何回调。适配器用

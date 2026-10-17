@@ -420,7 +420,12 @@ public final class TcpSession implements DeviceSession {
             case NUMBER -> List.of(decodeNumber(addresses.get(0), payload, now));
             case TEXT -> List.of(decodeText(addresses.get(0), payload, now));
             case KEY_VALUE -> TcpValueSelector.select(addresses, payload, now);
-            case BINARY -> List.of(PointValue.good(addresses.get(0), payload.clone(), now));
+            // binary 交付的是原始字节：先过宿主可插解码 SPI（issue #30）。
+            // 无解码器/未认领/解码失败的行为见 AdapterContext#decodePayload 的矩阵，
+            // 失败一律 BAD（绝不让畸形字节以 GOOD 形态流到宿主）。
+            case BINARY -> List.of(context.decodePayload(
+                    PointValue.good(addresses.get(0), payload.clone(), now),
+                    device.deviceId(), connection.connectionId()));
         };
     }
 

@@ -50,6 +50,7 @@ import org.eclipse.milo.opcua.stack.core.security.DefaultServerCertificateValida
 import org.eclipse.milo.opcua.stack.core.security.MemoryCertificateQuarantine;
 import org.eclipse.milo.opcua.stack.core.security.MemoryTrustListManager;
 import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
+import org.eclipse.milo.opcua.stack.core.types.builtin.ByteString;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
@@ -289,6 +290,12 @@ final class OpcUaTestServer implements AutoCloseable {
             addVariable("Temperature", 23.5D, true);
             addVariable("Pressure", 1013L, true);
             addVariable("SerialNumber", "SN-0001", false);
+            // 二进制节点（issue #30 的解码 SPI 接线证据）：ByteString 是 OPC UA 的原始字节类型，
+            // 框架必须把它归一为 byte[] 再交给宿主解码器，否则宿主得依赖 Milo 才能处理二进制点位。
+            addVariable("BinaryBlob", ByteString.of(new byte[] {0x00, 0x2A}), false);
+            // ByteString 的「null 值」边界（与「长度 0 的空字节串」是两回事）：
+            // 框架必须让它以 null 值交付，而不是伪造成空数组（否则宿主会把「没有值」当「值是空」）。
+            addVariable("NullBlob", ByteString.NULL_VALUE, false);
         }
 
         void updateValue(String identifier, Object value) {
@@ -323,6 +330,9 @@ final class OpcUaTestServer implements AutoCloseable {
             }
             if (value instanceof Long) {
                 return Identifiers.Int64;
+            }
+            if (value instanceof ByteString) {
+                return Identifiers.ByteString;
             }
             return Identifiers.String;
         }

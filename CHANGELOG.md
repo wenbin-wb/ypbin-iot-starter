@@ -3,14 +3,75 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)：`主版本.次版本.修订号`。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-当前开发版：`0.3.1-SNAPSHOT`。
+当前开发版：`0.3.4-SNAPSHOT`。
 
 已发布：**`0.1.0`（2026-09-21）**、**`0.2.0`（2026-09-29）** 与 **`0.3.0`（2026-10-12）**，均已发布到 Maven Central；
 其中 `0.1.0` 由 `ypbin-access` 作为首个真实宿主接入验证。
 
 ## [未发布]
 
+### 新增
+
+- **宿主可插字节载荷解码 SPI（issue #30）**：二进制交付路径（TCP `payload-format=binary`、MQTT
+  `payload-format=binary`、OPC UA `ByteString`）此前只能把原始字节交给宿主，框架没有统一扩展点，
+  宿主被迫各自造一套 `BytePayloadDecoder` + 注册机（换宿主就重写一遍，失败信号也各写各的）。
+  现在 `iot-core` 定义 SPI（`BytePayloadDecoder` / `DecodeContext` / `DecodeOutcome` /
+  `DecodeFailure` / `BytePayloadDecoderRegistry`）与路由门面 `BytePayloadDecoding`，
+  `iot-runtime` 提供 `DefaultBytePayloadDecoderRegistry`，starter 收集宿主 `@Bean BytePayloadDecoder`
+  并按 `@Order` 选择第一个认领者、注入每个 `AdapterContext`；协议模块在交付字节前调
+  `context.decodePayload(...)` 一行接入。行为矩阵：**空注册表 = 与没有本 SPI 逐字一致**（不加计数）；
+  非空但未认领 → 原样交付 + `iot.common.payload.decoder.not-found`；认领后失败/解码器抛异常 →
+  **BAD** + `iot.common.payload.decode-failed.<原因>`（绝不把垃圾字节当 GOOD）。
+  OPC UA 另把 Milo `ByteString` 归一为 `byte[]`（宿主解码器不再被迫依赖 Milo）。
+  测试：`BytePayloadDecodingTest`（BPD-01~12）、`DefaultBytePayloadDecoderRegistryTest`
+  （BPR-01~10）、`BytePayloadDecoderAssemblyTest`（BPA-01~05）、`MqttBytePayloadDecodingTest`
+  （MBPD-01~03）、`TcpBytePayloadDecodingTest`（TBPD-01~02）、`OpcUaBytePayloadDecodingTest`
+  （OBPD-01~06）；契约见 [`docs/SPI.md`](docs/SPI.md) §9。
+
+- **Modbus 寄存器词法解码工具 `ModbusRegisterDecoder`（issue #31）**：把宿主自建的纯算术解码下沉到
+  `ypbin-iot-protocol-modbus`——单寄存器 16 位（有/无符号）、双寄存器 32 位（ABCD/CDAB 字序）、
+  IEEE754 单/双精度、多寄存器严格 UTF-8（去尾部 NUL、保留中间 NUL）、位域，全部零 IO、无状态、
+  无外部依赖。字序口径与宿主历史实现一致（`big`=高字在前、`little`=低字在前/整体翻转），
+  不支持 BADC 等字内字节交换（属于设备方言）。测试：`ModbusRegisterDecoderTest` MRD-01~14
+  （含 8 组经典字序矩阵与边界），下游可直接以该测试作为迁移对照表。
+
+- **有界微批出口队列 `BoundedBatchEgressQueue<T>`（issue #32）**：在 `iot-runtime` 沉淀流式采集
+  缓冲出口的通用基座——`offer` 用 `ArrayBlockingQueue#offer` **绝不阻塞协议线程**，队满/已关闭
+  返回 `false` 并计数、上报 `iot.common.egress.dropped`、限流 WARN；单平台 daemon 线程按
+  `batchSize` + `flushInterval` 微批消费；Sink 抛异常只损失本批（ERROR 全堆栈 + 失败计数，
+  线程继续）；`close()` 有界等待后把剩余元素按批循环 flush（不静默丢在内存里），
+  消费线程卡死时不并发调 Sink。宿主只需实现 `BatchEgressSink<T>`（写 HTTP / 发 Kafka / 批量落库），
+  缓冲、并发、丢弃可见性与停机排空由基座兜底。测试 `BoundedBatchEgressQueueTest` BEG-01~12
+  （切批不丢、时间窗口、队列满计数、关闭 flush/drain、故障隔离、并发不丢不重、fail-fast、
+  gauge 上报、卡死 Sink 的有界等待）。
+
+### 破坏性变更
+
+- **OPC UA 的 `ByteString` 节点现在交付 `byte[]` 而不是 Milo `ByteString` 对象（issue #30）**：
+  为了使宿主解码 SPI（输入契约为 `byte[]`）能处理 OPC UA 二进制节点，且避免每个宿主都被迫依赖
+  Milo，`OpcUaSession` 现在把 `ByteString` 归一为 `byte[]`（null 值保持 `null`，不伪造空数组）。
+  **迁移方式**：若宿主此前按 `(ByteString) value` 消费该点位，改为 `(byte[]) value`；
+  若只需原样落库，`byte[]` 与 `ByteString.bytes()` 内容一致。
+  该变更**与是否注册解码器无关**（空注册表也归一），因为「交付类型稳定」比「零改动」更重要。
+
 ### 修复
+
+- **`BoundedBatchEgressQueue` 的 offer 与 close 竞态会静默丢元素（issue #32，独立验收发现）**：
+  `offer` 的「检查 `closed` → 入队」与 `close` 的「置位 → interrupt → join → 兜底 flush」之间
+  原本无双同步，存在窗口：offer 读到 `closed=false`，close 完成排空并返回，offer 才入队成功
+  —— 该元素既未送达也未计入 `dropped`，永久滞留内存，直接违反「关闭后不得静默接受」的承诺。
+  修法：用 `ReentrantLock` 把「检查 + 入队」与「置关闭标志」串行化（禁 `synchronized`），
+  且锁内只做 O(1) 操作（不计日志）。回归用例 `BEG-12`（400 轮 × 4 生产者并发 offer + close，
+  断言 `accepted <= delivered + dropped` 且 `pending == 0`），**回退修复即变红**。
+  另修正 `BEG-05` 的等待条件（原只等 `sink.received.size()`，与随后断言的 `deliveredItems`
+  存在竞态，实测会偶发红）。
+
+- **`BytePayloadDecoder#supports()` 抛异常会逃到协议线程（issue #30，独立验收发现）**：
+  `BytePayloadDecoding.apply` 的 `registry.find(context)` 在 try 之外，宿主解码器在 `supports()`
+  里抛异常（SPI 明令禁止，但禁止不等于不会发生）会沿 MQTT/OPC UA 的协议库回调栈逃逸
+  （TCP 有传输层兜底，MQTT/OPC UA 没有）。修法：把 `find` 包进 try/catch，按 `decoder-error`
+  处理（BAD + 指标 + ERROR 全堆栈），与 `decode()` 抛异常的行为一致。
+  回归用例 `BPD-13`（core）与 `OBPD-06`（OPC UA 真实会话）。
 
 - **SDK 指标桥在真实宿主里从未生效（UP-11 二次修复）**：Boot 4.x 定义 `MeterRegistry` 的自动配置是
   `CompositeMeterRegistryAutoConfiguration`，而 `MetricsAutoConfiguration` 只定义 `Clock` /

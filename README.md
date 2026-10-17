@@ -108,7 +108,8 @@ public final class MyProtocolAdapter implements ProtocolAdapter {
 }
 ```
 
-宿主引入模块即自动装配，把数据经 `DataSink` 接走：
+宿主引入模块即自动装配，把数据经 `DataSink` 接走；二进制点位可另注册 `BytePayloadDecoder`
+扩展解码（无解码器时行为不变，见 [`docs/SPI.md`](./docs/SPI.md) §9）：
 
 ```xml
 <dependency>
@@ -139,7 +140,7 @@ ypbin:
 | 点位读取、写入、订阅（原生/轮询/流式） | 规则引擎、告警、联动 |
 | 连接复用、采集调度、背压、微批出口 | 数据落库、时序库写入 |
 | 协议能力声明、诊断、指标 | 前端可视化、组态 |
-| 提供 `DataSink` / `DeviceRegistry` SPI 供宿主接入 | 设备 OTA、远程配置下发 |
+| 提供 `DataSink` / `DeviceRegistry` / `BytePayloadDecoder` SPI 与出口缓冲原语供宿主接入 | 设备 OTA、远程配置下发 |
 
 ---
 
@@ -274,7 +275,9 @@ mvn -Pit verify                # 集成测试（*IT.java，完整 Spring Boot �
 
 > **集成测试**在 `ypbin-iot-integration-tests`（不发布，由 `it` / `dev-only` profile 承载）：
 > 用完整 Spring Boot 上下文跑端到端场景（自动装配 → 生命周期绑定 → 建链 → 订阅 →
-> 中间件推送 → 出口），宿主只提供 `DeviceRegistry` / `ConnectionSpecProvider` / `DataSink` 三样 SPI。
+> 中间件推送 → 出口），宿主只提供 `DeviceRegistry` / `ConnectionSpecProvider` / `DataSink` 三样 SPI；
+> 二进制私有帧另可选注册 `BytePayloadDecoder`，宿主侧自有缓冲可直接用
+> `BoundedBatchEgressQueue<T>`（见 [`docs/SPI.md`](./docs/SPI.md) §9 与 [`docs/DESIGN.md`](./docs/DESIGN.md) §4.5.1）。
 > **注意必须带 `-Pit`**：不带的话这些 `*IT.java` 根本不会被执行（surefire 默认不匹配 `*IT.java`）。
 >
 > **子模块测试 vs 全量**：`-pl X test`（不带 `-am`）会用 `~/.m2` 里的**旧制品**跑测试，
