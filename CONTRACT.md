@@ -64,13 +64,16 @@
    `#subscribeWithMultipleAddressesMustFailFast`（TCP-11，非 key-value 回归）。
 9. **二进制载荷的解码扩展点（issue #30）**：TCP/MQTT 的 `payload-format=binary` 与 OPC UA
    `ByteString` 交付给宿主前，都会经过宿主可插解码 SPI（`BytePayloadDecoder`）。
-   **未注册任何解码器时行为与「没有本 SPI」逐字一致**（`byte[]` 原样交付、不产生错误计数）；
+   **未注册任何解码器时不产生错误计数、不做任何解码**（载荷类型见下条对 OPC UA 的说明）；
    注册后未认领只计数 `iot.common.payload.decoder.not-found` 并原样交付；认领后解码失败或解码器
    抛异常一律产出 **BAD** + `iot.common.payload.decode-failed.<原因>`，绝不把原始字节当 GOOD 交付。
-   OPC UA 的 Milo `ByteString` 在调用 SPI 前已归一为 `byte[]`（宿主解码器无需依赖 Milo）。
-   测试：`BytePayloadDecodingTest`（BPD-01~12）、`BytePayloadDecoderAssemblyTest`（BPA-01~05）、
+   TCP 与 MQTT 在未注册解码器时交付的仍是原始 `byte[]`（与改动前逐字一致）。
+   **OPC UA 例外**：Milo `ByteString` 在调用 SPI 前一律归一为 `byte[]`（null 值保持 `null`），
+   **与是否注册解码器无关** —— 这是**破坏性变更**（此前交付 Milo `ByteString` 对象），
+   迁移方式见 `CHANGELOG.md`「破坏性变更」。理由：宿主解码器不应被迫依赖 Milo。
+   测试：`BytePayloadDecodingTest`（BPD-01~13）、`BytePayloadDecoderAssemblyTest`（BPA-01~05）、
    `MqttBytePayloadDecodingTest`（MBPD-01~03）、`TcpBytePayloadDecodingTest`（TBPD-01~02）、
-   `OpcUaBytePayloadDecodingTest`（OBPD-01~04）。
+   `OpcUaBytePayloadDecodingTest`（OBPD-01~06）。
 
 ## 五、明确不做的（有意为之，不是缺陷）
 

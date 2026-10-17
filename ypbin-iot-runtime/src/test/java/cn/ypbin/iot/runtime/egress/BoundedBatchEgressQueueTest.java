@@ -192,13 +192,17 @@ class BoundedBatchEgressQueueTest {
     void sinkFailureMustNotStopConsumer() {
         FailFirstSink sink = new FailFirstSink();
         try (BoundedBatchEgressQueue<Integer> queue = new BoundedBatchEgressQueue<>(256, 1,
-                Duration.ofMillis(20), sink, new RecordingMetrics())) {            assertThat(queue.offer(0)).isTrue();
+                Duration.ofMillis(20), sink, new RecordingMetrics())) {
+            assertThat(queue.offer(0)).isTrue();
             awaitUntil("首批失败必须被计数", () -> queue.sinkFailures() >= 1);
             assertThat(queue.deliveredItems()).as("失败的批次不得计入已投递").isZero();
 
             assertThat(queue.offer(1)).isTrue();
             assertThat(queue.offer(2)).isTrue();
-            awaitUntil("失败后的批次必须继续送达", () -> sink.received.size() == 2);
+            // 等待条件必须包含计数器本体：sink 先记账本批、再由 flush() 在 accept 返回后累加
+            // deliveredItems，只等 sink.received 会与紧随其后的计数断言产生竞态（BEG-05 曾因此红）
+            awaitUntil("失败后的批次必须继续送达并计数", () ->
+                    sink.received.size() == 2 && queue.deliveredItems() == 2);
             assertThat(sink.received).containsExactly(1, 2);
             assertThat(queue.deliveredItems()).isEqualTo(2);
             assertThat(queue.sinkFailures()).isGreaterThanOrEqualTo(1);
@@ -209,7 +213,8 @@ class BoundedBatchEgressQueueTest {
             // 这里不是「用 sleep 做计时断言」：断言的是空闲后的行为，sleep 只是构造空闲窗口。
             idleFor(Duration.ofMillis(200));
             assertThat(queue.offer(3)).isTrue();
-            awaitUntil("空闲后消费线程必须仍然存活并继续送达", () -> sink.received.size() == 3);
+            awaitUntil("空闲后消费线程必须仍然存活并继续送达", () ->
+                    sink.received.size() == 3 && queue.deliveredItems() == 3);
             assertThat(sink.received).containsExactly(1, 2, 3);
         }
     }
@@ -340,6 +345,63 @@ class BoundedBatchEgressQueueTest {
         } finally {
             sink.openGate();
             queue.close();
+        }
+    }
+
+    @Test
+    @DisplayName("BEG-12 offer 与 close 并发：close 返回后不得再有元素被静默接受（回归 P1 竞态）")
+    void offerConcurrentWithCloseMustNeverAcceptSilently() throws Exception {
+        // 实测缺陷（第三方验收发现）：offer 先读 closed=false，close 完成置位/interrupt/join/
+        // flushRemaining（此时队列为空）并返回，offer 才真正入队 —— 该元素永久滞留内存，
+        // 既未送达也未计入 dropped，直接违反「关闭后不得静默接受」。
+        //
+        // 本用例用「大量轮次 × 与 close 并发」把窗口逼出来：每一轮都必须满足
+        //   accepted == delivered + dropped 且 pending == 0
+        // （即「入队成功的元素最终一定有归宿」）。加锁修复前该不变式会被打破。
+        // 轮数 × 生产者数是「把窗口逼出来」的手段：探针实测无锁版本 400 轮 4 生产者下 41 轮踩中，
+        // 因此这条用例在回退修复时**几乎必然**变红（而不是偶发）。有锁之后恒绿。
+        final int rounds = 400;
+        final int producers = 4;
+        final int perProducer = 200;
+        for (int round = 0; round < rounds; round++) {
+            RecordingSink sink = new RecordingSink();
+            BoundedBatchEgressQueue<Integer> queue = new BoundedBatchEgressQueue<>(8192, 512,
+                    Duration.ofMillis(1), sink, new RecordingMetrics());
+            CountDownLatch start = new CountDownLatch(1);
+            AtomicInteger accepted = new AtomicInteger();
+            ExecutorService pool = Executors.newFixedThreadPool(producers + 1);
+            try {
+                for (int producer = 0; producer < producers; producer++) {
+                    pool.submit(() -> {
+                        awaitQuietly(start);
+                        for (int index = 0; index < perProducer; index++) {
+                            if (queue.offer(index)) {
+                                accepted.incrementAndGet();
+                            }
+                        }
+                    });
+                }
+                pool.submit(() -> {
+                    awaitQuietly(start);
+                    queue.close();
+                });
+                start.countDown();
+                pool.shutdown();
+                assertThat(pool.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
+                queue.close();
+
+                long accounted = queue.deliveredItems() + queue.droppedCount();
+                assertThat(accounted)
+                        .as("第 %d 轮：入队成功 %d 条，但 delivered+dropped=%d（有元素既未送达也未计数 = 静默丢失）",
+                                round, accepted.get(), accounted)
+                        .isGreaterThanOrEqualTo(accepted.get());
+                assertThat(queue.pending())
+                        .as("第 %d 轮：close 返回后队列必须为空（剩余元素已由兜底 flush 送出）", round)
+                        .isZero();
+            } finally {
+                queue.close();
+                pool.shutdownNow();
+            }
         }
     }
 

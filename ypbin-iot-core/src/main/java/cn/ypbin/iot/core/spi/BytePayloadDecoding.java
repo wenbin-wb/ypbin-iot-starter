@@ -60,7 +60,13 @@ import org.slf4j.LoggerFactory;
  *     <td>宁可显式 BAD 也不把垃圾值当 GOOD 交付（G6）</td>
  *   </tr>
  *   <tr>
- *     <td>解码器抛异常（实现缺陷）</td>
+ *     <td>解码器 {@code supports()} 抛异常（实现缺陷）</td>
+ *     <td><b>BAD</b> + {@code decoder-error}</td>
+ *     <td>{@code iot.common.payload.decode-failed.decoder-error}</td>
+ *     <td>同上；MQTT/OPC UA 的回调栈没有传输层兜底，逃逸会打断整条链路</td>
+ *   </tr>
+ *   <tr>
+ *     <td>解码器 {@code decode()} 抛异常（实现缺陷）</td>
  *     <td><b>BAD</b> + {@code decoder-error}</td>
  *     <td>{@code iot.common.payload.decode-failed.decoder-error}</td>
  *     <td>不得让宿主实现的缺陷打断协议线程，也不得静默吞掉</td>
@@ -113,7 +119,20 @@ public final class BytePayloadDecoding {
             return value;
         }
         DecodeContext context = new DecodeContext(deviceId, protocol, value.address().raw(), connectionId);
-        Optional<BytePayloadDecoder> decoder = effective.find(context);
+        Optional<BytePayloadDecoder> decoder;
+        try {
+            decoder = effective.find(context);
+        } catch (RuntimeException ex) {
+            // supports() 抛异常属实现缺陷（SPI 明令禁止），但绝不能让它逃到协议线程：
+            // MQTT/OPC UA 的 dispatch 直接把调用栈交给协议库回调，异常逃逸会打断整条链路。
+            // 这里按「认领声明失败」处理，且显式暴露为 decoder-error 指标 + ERROR 日志（不静默）。
+            metrics.recordError(DecodeFailure.DECODER_ERROR.messageKey());
+            log.error("[ypbin-iot] BytePayloadDecoder#supports threw for device {} point {}; "
+                    + "treating the payload as undecodable rather than letting the exception escape",
+                    deviceId, value.address().raw(), ex);
+            return PointValue.bad(value.address(), Quality.BAD,
+                    DecodeFailure.DECODER_ERROR.messageKey(), value.timestamp());
+        }
         if (decoder.isEmpty()) {
             metrics.recordError(IotMessageKeys.PAYLOAD_DECODER_NOT_FOUND);
             log.debug("[ypbin-iot] no BytePayloadDecoder claimed device {} point {}; kept as byte[].",

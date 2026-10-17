@@ -54,9 +54,6 @@ public final class IotMessageKeys {
     /** 出口队列丢弃（有界队列满或已关闭）。 */
     public static final String EGRESS_DROPPED = "iot.common.egress.dropped";
 
-    /** 解码器抛异常（实现缺陷；与 {@code DecodeFailure#DECODER_ERROR} 同键，供日志/指标复用）。 */
-    public static final String PAYLOAD_DECODER_ERROR = PAYLOAD_DECODE_FAILED_PREFIX + "decoder-error";
-
     /** 建链超时。 */
     public static final String CONNECTION_TIMEOUT = CONNECTION_PREFIX + "timeout";
 

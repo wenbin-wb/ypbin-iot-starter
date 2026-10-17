@@ -48,9 +48,13 @@ package cn.ypbin.iot.core.spi;
 public interface BytePayloadDecoder {
 
     /**
-     * 稳定标识：用于日志、排障与同序解码器的确定性排序。
+     * 稳定标识：仅用于日志与排障。
      *
      * <p>取值应稳定且有界（如 {@code mqtt-binary-number}），<b>不得</b>包含设备 ID 等高频变化内容。</p>
+     *
+     * <p><b>不参与选择顺序</b>：多个解码器同时认领时的先后由 {@code @Order}/{@code Ordered}
+     * 决定（见 {@link BytePayloadDecoderRegistry}）；本方法<b>不</b>用作兜底排序键，
+     * 否则方法级 {@code @Order} 会被打乱。</p>
      *
      * @return 解码器标识
      */

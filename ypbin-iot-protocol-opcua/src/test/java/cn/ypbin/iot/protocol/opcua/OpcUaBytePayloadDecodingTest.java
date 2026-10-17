@@ -131,6 +131,44 @@ class OpcUaBytePayloadDecodingTest {
     }
 
     @Test
+    @DisplayName("OBPD-05 ByteString 的 null 值必须交付 null，不得伪造成空数组（与长度 0 的空字节串区分）")
+    void nullByteStringMustStayNull() {
+        PointValue value = readPoint("NullBlob", BytePayloadDecoderRegistry.empty());
+
+        assertThat(value.quality()).isEqualTo(Quality.GOOD);
+        assertThat(value.value())
+                .as("ODPC UA 的 ByteString null 是「没有值」；伪造成 byte[0] 会让宿主把「无值」当「空值」")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("OBPD-06 解码器 supports() 抛异常不得逃到协议线程（MQTT/OPC UA 的回调栈无传输层兜底）")
+    void throwingSupportsMustNotEscape() {
+        BytePayloadDecoderRegistry registry = new DefaultBytePayloadDecoderRegistry(
+                List.of(new BytePayloadDecoder() {
+                    @Override
+                    public String id() {
+                        return "broken-supports";
+                    }
+
+                    @Override
+                    public boolean supports(DecodeContext context) {
+                        throw new IllegalStateException("supports bug by design");
+                    }
+
+                    @Override
+                    public DecodeOutcome decode(byte[] payload, DecodeContext context) {
+                        return DecodeOutcome.ok(1);
+                    }
+                }));
+
+        PointValue value = readWithRegistry(registry);
+
+        assertThat(value.quality()).isEqualTo(Quality.BAD);
+        assertThat(value.qualityReason()).isEqualTo(DecodeFailure.DECODER_ERROR.messageKey());
+    }
+
+    @Test
     @DisplayName("OBPD-04 原生订阅推送的 ByteString 也必须过解码 SPI（不能只修 read 路径）")
     void subscriptionPushMustBeDecodedToo() throws Exception {
         AdapterContext context = contextWith(new DefaultBytePayloadDecoderRegistry(
@@ -156,11 +194,16 @@ class OpcUaBytePayloadDecodingTest {
     }
 
     private PointValue readWithRegistry(BytePayloadDecoderRegistry registry) {
+        return readPoint("BinaryBlob", registry);
+    }
+
+    /** 读指定节点并返回第一个点位值（会话在本方法内创建与关闭）。 */
+    private PointValue readPoint(String nodeIdentifier, BytePayloadDecoderRegistry registry) {
         AdapterContext context = contextWith(registry);
         DeviceSession session = openSession(context);
         try {
             return session.read(ReadRequest.of(
-                            PointAddress.of(server.nodeAddress("BinaryBlob"))))
+                            PointAddress.of(server.nodeAddress(nodeIdentifier))))
                     .toCompletableFuture().orTimeout(15, TimeUnit.SECONDS).join()
                     .values().get(0);
         } finally {

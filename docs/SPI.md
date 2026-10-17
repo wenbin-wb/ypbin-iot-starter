@@ -1780,7 +1780,7 @@ DeviceRegistry.loadAll()                    → 得到设备清单（deviceId + 
 
 ---
 
-## 9. 一个完整的最小协议实现（参考样例）
+## 10. 一个完整的最小协议实现（参考样例）
 
 下面是一个「通用 TCP 透传」协议适配器的完整实现骨架，用于说明**新增协议到底要写多少代码**：
 
@@ -1880,7 +1880,7 @@ public record DecodeOutcome(@Nullable Object value, @Nullable DecodeFailure fail
 public enum DecodeFailure { /* code + detail + desc + messageKey() + fromCode(int) */ }
 ```
 
-### 9.3 行为矩阵（**冻结**，测试 `BytePayloadDecodingTest` BPD-01~12）
+### 9.3 行为矩阵（**冻结**，测试 `BytePayloadDecodingTest` BPD-01~13）
 
 | 场景 | 返回 | 指标 `ypbin.iot.errors{type=…}` |
 |---|---|---|
@@ -1888,13 +1888,16 @@ public enum DecodeFailure { /* code + detail + desc + messageKey() + fromCode(in
 | **注册表为空**（宿主没注册解码器） | 原值（`byte[]` 照旧交付） | **无**（行为与「没有本 SPI」逐字一致） |
 | 注册表非空但**无解码器认领** | 原值（`byte[]` 照旧交付） | `iot.common.payload.decoder.not-found` |
 | 认领后**解码失败** | **BAD** + `qualityReason=iot.common.payload.decode-failed.<detail>` | 同键 |
-| 解码器**抛异常 / 返回 null** | **BAD** + `decoder-error`（不向协议线程逃逸） | `…decode-failed.decoder-error` |
+| 解码器 `decode()` **抛异常 / 返回 null** | **BAD** + `decoder-error`（不向协议线程逃逸） | `…decode-failed.decoder-error` |
+| 解码器 `supports()` **抛异常** | **BAD** + `decoder-error`（同上；MQTT/OPC UA 的回调栈无传输层兜底） | `…decode-failed.decoder-error` |
 | **解码成功** | GOOD + 规范值（保留原地址与源时间戳） | 无 |
 
 **顺序契约**：注册表按 starter 的 `ObjectProvider#orderedStream()`（即 `@Order`/`Ordered`，
-含 `@Bean` 方法上的注解）取第一个认领者；结果确定、不随 Bean 注册顺序漂动。
-⚠️ 不要在实例上再做二次排序——`@Bean` 方法上的 `@Order` 不属于实例元数据，二次排序会打乱顺序
-（本仓实测踩过，用例 `BPA-03` 钉死）。
+含 `@Bean` 方法上的注解）取**第一个**认领者。**同序**（都没标或标了相同值）时按 Spring 的
+Bean 注册顺序，框架**不做**二次排序。
+⚠️ 不要在实例上再用 `id()` 之类的键二次排序——`@Bean` 方法上的 `@Order` 不属于实例元数据，
+二次比较会把它们当成同序而打乱 `orderedStream()` 的结果（本仓实测踩过，用例 `BPA-03` 钉死）。
+需要确定顺序的宿主请用 `@Order`/`Ordered`，不要依赖 `id()` 字典序。
 
 ### 9.4 宿主用法（最小可运行）
 
@@ -1939,5 +1942,11 @@ ypbin:
 
 Milo 的 `ByteString` 是协议库类型（record），不是 `byte[]`。`OpcUaSession` 在调用解码 SPI
 **之前**把它归一为 `byte[]`（`ByteString#isNull()` 保持 `null`，不伪造空数组），
-因此宿主解码器永远只面对 `byte[]`、无需依赖 Milo。证据用例
-`OpcUaBytePayloadDecodingTest` OBPD-01~04（read 与原生订阅两条路径）。
+因此宿主解码器永远只面对 `byte[]`、无需依赖 Milo。**空值语义**：`ByteString` 的 null 值
+（`ByteString.NULL_VALUE` / `bytes()==null`）交付为 `null`，**不**伪造成空数组——「没有值」与
+「值是空字节串」是两回事。证据用例 `OpcUaBytePayloadDecodingTest` OBPD-01~06
+（read、原生订阅、null 值、`supports()` 抛异常四条边界）。
+
+**兼容性说明（重要）**：OPC UA 的 `ByteString` 节点在**本版本之前**原样交付 Milo 的
+`ByteString` 对象；**现在无论是否注册解码器都交付 `byte[]`**。按旧类型消费该点的宿主会
+`ClassCastException`，迁移方式见 `CHANGELOG.md` 的「破坏性变更」小节。

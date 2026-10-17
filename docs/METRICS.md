@@ -105,8 +105,12 @@
 | `iot.common.payload.decode-failed.not-finite` | 解出的浮点为 NaN/±Inf | `BytePayloadDecoding#invoke`（`DecodeFailure.NOT_FINITE`） |
 | `iot.common.payload.decode-failed.invalid-value` | 字节串无法按声明规格解释 | `BytePayloadDecoding#invoke`（`DecodeFailure.INVALID_VALUE`） |
 | `iot.common.payload.decode-failed.config-missing` | 该点位没有可用解码配置 | `BytePayloadDecoding#invoke`（`DecodeFailure.CONFIG_MISSING`） |
-| `iot.common.payload.decode-failed.decoder-error` | 解码器抛异常或返回 null（实现缺陷） | `BytePayloadDecoding#invoke`（`DecodeFailure.DECODER_ERROR`） |
+| `iot.common.payload.decode-failed.decoder-error` | 解码器 `decode()`/`supports()` 抛异常或返回 null（实现缺陷） | `BytePayloadDecoding#apply` / `#invoke`（`DecodeFailure.DECODER_ERROR`） |
 | `iot.common.egress.dropped` | 有界出口队列已满或已关闭，元素被丢弃 | `BoundedBatchEgressQueue#recordDrop` |
+
+**另有非错误类指标**：`BoundedBatchEgressQueue` 每次 flush 后上报 gauge
+`ypbin.iot.egress.pending`（当前积压元素数）。它**不按 `type` 打标签**、也不是错误计数，
+因此不进上面的错误码表；发现「丢弃在涨」时可先看它是否持续高位（典型原因：Sink 太慢）。
 
 **失败原因码的来源是枚举**：`DecodeFailure` 的取值集合编译期有界，`messageKey()` 同时用作
 BAD 质量的 `qualityReason` 与指标标签 ⇒ 日志看到的键与指标标签永远一致，不会产生基数爆炸。

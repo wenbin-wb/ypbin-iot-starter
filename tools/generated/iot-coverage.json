@@ -19,17 +19,17 @@
     {
       "module": "ypbin-iot-protocol-opcua",
       "classes": 12,
-      "instructionPct": 82.87,
-      "branchPct": 69.46,
-      "instructionMarginPp": 2.87,
-      "branchMarginPp": 5.46
+      "instructionPct": 82.93,
+      "branchPct": 69.73,
+      "instructionMarginPp": 2.93,
+      "branchMarginPp": 5.73
     },
     {
       "module": "ypbin-iot-core",
       "classes": 51,
-      "instructionPct": 83,
+      "instructionPct": 83.19,
       "branchPct": 70.24,
-      "instructionMarginPp": 3,
+      "instructionMarginPp": 3.19,
       "branchMarginPp": 6.24
     },
     {
@@ -43,10 +43,10 @@
     {
       "module": "ypbin-iot-runtime",
       "classes": 23,
-      "instructionPct": 85.13,
-      "branchPct": 72.73,
-      "instructionMarginPp": 5.13,
-      "branchMarginPp": 8.73
+      "instructionPct": 85.83,
+      "branchPct": 73.64,
+      "instructionMarginPp": 5.83,
+      "branchMarginPp": 9.64
     },
     {
       "module": "ypbin-iot-transport",
@@ -67,10 +67,10 @@
     {
       "module": "ypbin-iot-protocol-mqtt",
       "classes": 8,
-      "instructionPct": 89.01,
-      "branchPct": 84.15,
-      "instructionMarginPp": 9.01,
-      "branchMarginPp": 20.15
+      "instructionPct": 89.31,
+      "branchPct": 84.76,
+      "instructionMarginPp": 9.31,
+      "branchMarginPp": 20.76
     }
   ]
 }

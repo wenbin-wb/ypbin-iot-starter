@@ -25,10 +25,15 @@ import java.util.Optional;
  * 必须只有一处实现（SSOT）。散落在各协议模块里会出现「TCP 认第一个、MQTT 认最后一个」
  * 这类不一致，且新增解码器时要改多处。</p>
  *
- * <p><b>顺序契约</b>：由装配层（Spring 的 {@code @Order}/{@code Ordered}，同序按
- * {@link BytePayloadDecoder#id()} 字典序）排好序后传入本注册表；{@link #find(DecodeContext)}
- * 返回<b>第一个</b>认领的解码器。这样多个解码器同时认领同一上下文时结果确定，不随 Bean
- * 注册顺序漂动。</p>
+ * <p><b>顺序契约</b>：装配层先用 Spring 的 {@code @Order}/{@code Ordered}（{@code orderedStream()}）
+ * 排好序再传入本注册表；{@link #find(DecodeContext)} 返回<b>第一个</b>认领的解码器。</p>
+ *
+ * <p><b>同序（都没标 {@code @Order} 或标了相同值）时按 Spring 的 Bean 注册顺序</b>，本注册表
+ * <b>不做</b>二次排序。原因：{@code @Order} 可以写在 {@code @Bean} <b>方法</b>上，此时顺序元数据
+ * 不在解码器实例里；若拿实例再比较一次，所有「方法级 {@code @Order}」都会被当成同序而被打乱
+ * （本仓实测踩过：{@code @Order(1)} 的解码器被排到了 {@code @Order(2)} 后面）。
+ * 因此需要确定顺序的宿主请使用 {@code @Order} 或 {@code Ordered} 接口，而不是依赖 {@link
+ * BytePayloadDecoder#id()} 的字典序。</p>
  *
  * <p><b>空注册表</b>：{@link #empty()} 表示「宿主没有注册任何解码器」，此时
  * {@link #find(DecodeContext)} 恒为空 ⇒ 调用方按「没有本 SPI 时」的行为处理（原样交付字节），

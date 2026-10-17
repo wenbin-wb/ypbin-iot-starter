@@ -157,6 +157,34 @@ class BytePayloadDecodingTest {
     }
 
     @Test
+    @DisplayName("BPD-13 supports() 抛异常：必须转成 BAD decoder-error，绝不能逃到协议线程")
+    void throwingSupportsMustNotEscape() {
+        BytePayloadDecoderRegistry registry = new DefaultRegistry(List.of(new BytePayloadDecoder() {
+            @Override
+            public String id() {
+                return "broken-supports";
+            }
+
+            @Override
+            public boolean supports(DecodeContext context) {
+                throw new IllegalStateException("supports bug by design");
+            }
+
+            @Override
+            public DecodeOutcome decode(byte[] payload, DecodeContext context) {
+                return DecodeOutcome.ok(1);
+            }
+        }));
+
+        PointValue result = BytePayloadDecoding.apply(binaryPoint(new byte[] {1}), DEVICE_ID, CODE,
+                CONNECTION_ID, registry, metrics);
+
+        assertThat(result.quality()).isEqualTo(Quality.BAD);
+        assertThat(result.qualityReason()).isEqualTo(DecodeFailure.DECODER_ERROR.messageKey());
+        assertThat(metrics.errors).containsExactly(DecodeFailure.DECODER_ERROR.messageKey());
+    }
+
+    @Test
     @DisplayName("BPD-08 非 byte[] 值 / 非 GOOD 值：完全绕过解码器（不得改写宿主已拿到的值）")
     void nonByteAndNonGoodValuesMustBeIgnored() {
         BytePayloadDecoderRegistry registry = new DefaultRegistry(List.of(new FixedDecoder("spy", true,

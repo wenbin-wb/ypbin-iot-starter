@@ -27,6 +27,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -133,6 +134,22 @@ public final class BoundedBatchEgressQueue<T> implements AutoCloseable {
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
+    /**
+     * 生命周期锁：把「检查 closed + 入队」与「置 closed」串行化。
+     *
+     * <p><b>为什么必须有它（实测缺陷）</b>：offer 与 close 若无同步，存在如下窗口——
+     * offer 读到 {@code closed=false} → close 置位、interrupt、join 成功、{@code flushRemaining()}
+     * 排空（此刻队列还是空的）→ close 返回 → offer 才把元素放进队列并返回 {@code true}。
+     * 此后消费线程已退出、close 又幂等，该元素<b>永久滞留内存且既未送达也未计入丢弃</b>，
+     * 直接违反「关闭后不得静默接受」的承诺。用锁把两段临界区串行化后，
+     * 「已置 closed 之后不可能再插入新元素」，而「插入成功的元素必然被随后的 drain 看到」。</p>
+     *
+     * <p>用 {@link ReentrantLock} 而非 {@code synchronized}：自研代码在虚拟线程下禁
+     * {@code synchronized}（会 pinning，ArchUnit 强制）。锁内只做 O(1) 的队列 offer/标志位操作，
+     * 不含日志与 IO（丢弃日志在锁外记录），因此不会成为协议线程的竞争热点。</p>
+     */
+    private final ReentrantLock lifecycleLock = new ReentrantLock();
+
     private final Thread consumer;
 
     /**
@@ -179,14 +196,21 @@ public final class BoundedBatchEgressQueue<T> implements AutoCloseable {
      */
     public boolean offer(T item) {
         Objects.requireNonNull(item, "item must not be null");
-        if (closed.get()) {
-            recordDrop("queue closed");
-            return false;
+        String dropReason;
+        lifecycleLock.lock();
+        try {
+            if (closed.get()) {
+                dropReason = "queue closed";
+            } else if (queue.offer(item)) {
+                return true;
+            } else {
+                dropReason = "queue full";
+            }
+        } finally {
+            lifecycleLock.unlock();
         }
-        if (queue.offer(item)) {
-            return true;
-        }
-        recordDrop("queue full");
+        // 日志与计数放在锁外：限流 WARN 虽然低频，但没必要让它占住协议线程与 close 共享的临界区
+        recordDrop(dropReason);
         return false;
     }
 
@@ -240,7 +264,8 @@ public final class BoundedBatchEgressQueue<T> implements AutoCloseable {
      *
      * <p>顺序与语义：</p>
      * <ol>
-     *   <li>置关闭标志并唤醒/中断消费线程（此后的 {@link #offer(Object)} 一律被拒并计数）；</li>
+     *   <li>在生命周期锁内置关闭标志（与 {@link #offer(Object)} 的「检查 + 入队」互斥，因此
+     *       close 返回后<b>不可能</b>再有元素插入队列；此后的 {@link #offer(Object)} 一律被拒并计数）；</li>
      *   <li><b>有界</b>等待消费线程退出（上限 {@code 5000ms}，见内部常量 {@code CLOSE_JOIN_TIMEOUT}）；</li>
      *   <li>线程已退出 → 把队列剩余元素按 {@code batchSize} 循环 flush（不静默留在内存里）；
      *       Sink 失败逐批计数并记 ERROR，不中断后续批次；</li>
@@ -259,8 +284,15 @@ public final class BoundedBatchEgressQueue<T> implements AutoCloseable {
      */
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
+        // 置位必须与 offer 的「检查 + 入队」互斥：否则两者之间的窗口会让 offer 在 drain 之后
+        // 才入队成功，元素永久滞留（详见 lifecycleLock 字段注释）。CAS 保证 close 幂等。
+        lifecycleLock.lock();
+        try {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+        } finally {
+            lifecycleLock.unlock();
         }
         if (Thread.currentThread() == consumer) {
             log.debug("[ypbin-iot] batch egress queue closed from its consumer thread; "

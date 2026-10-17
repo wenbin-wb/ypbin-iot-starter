@@ -780,11 +780,15 @@ Sink 拖死」。但很多宿主在 Sink 之后还有一段**自己的**通路�
 | 入队 | **绝不阻塞**；队满/已关闭返回 `false`，累加丢弃计数 + `iot.common.egress.dropped` 指标 + 限流 WARN |
 | 消费 | 单平台 daemon 线程；按 `batchSize` 切批、`flushInterval` 到期即送（兼具吞吐与延迟） |
 | 故障隔离 | Sink 抛 `RuntimeException` 只损失本批（ERROR 全堆栈 + 失败计数），线程继续；**不重投**（重试属 Sink 职责） |
-| 停机 | `close()` 有界等待消费线程退出 → 剩余元素按批循环 flush；线程卡死时**不并发**调 Sink，只记 WARN 与剩余数 |
+| 停机 | `close()` 在生命周期锁内置关闭标志（与 `offer` 的「检查 + 入队」互斥，**close 返回后不可能再有元素插入**）→ 有界等待消费线程退出 → 剩余元素按批循环 flush；线程卡死时**不并发**调 Sink，只记 WARN 与剩余数 |
 | 溢出策略 | **只有「丢新」**：采集数据「保最新 vs 保完整」是业务语义，由宿主在 Sink 侧决定，基座只保证不阻塞、不静默 |
 
 > 与 `EgressRouter` 的分工：`EgressRouter` 属于**框架数据面**（一类数据出口，面向 `DataSink`）；
 > `BoundedBatchEgressQueue` 是**宿主侧通用缓冲原语**，不绑定 `DataBatch`，任何元素类型都可用。
+>
+> **边界声明**：本仓内没有它的生产实例化方（框架自己的数据面走 `EgressRouter`）；它是给宿主
+> 在 `DataSink` 之后搭「自有通路」用的原语，宿主的真实接入需自行验证（`close()` 必须由容器或
+> `try-with-resources` 调用，否则消费线程不会优雅退出）。
 
 ---
 
