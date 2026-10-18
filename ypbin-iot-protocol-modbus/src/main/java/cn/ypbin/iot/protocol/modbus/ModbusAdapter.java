@@ -23,12 +23,14 @@ import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.Endpoint;
 import cn.ypbin.iot.core.model.ProbeResult;
+import cn.ypbin.iot.core.protocol.AddressExpansionExtension;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolAdapter;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.core.util.Stages;
 import com.digitalpetri.modbus.client.ModbusClient;
 import com.digitalpetri.modbus.client.ModbusClientConfig;
@@ -129,6 +131,14 @@ public final class ModbusAdapter implements ProtocolAdapter {
             .transport("TCP/SERIAL")
             .capabilities(ProtocolCapability.READ, ProtocolCapability.WRITE,
                     ProtocolCapability.SUBSCRIBE_POLLING, ProtocolCapability.MULTI_DEVICE_LINK)
+            // 一次订阅可携带多个地址：轮询订阅每轮把全部地址交给 session.read(...)，
+            // 由 ModbusSession 按寄存器区分组、按协议上限分块（125 寄存器 / 2000 线圈），
+            // 因此整批订阅是本协议的原生工作方式，逐点位拆分会把请求数按点位数放大。
+            .subscriptionAddressing(SubscriptionAddressing.BATCH)
+            // 声明地址算术扩展：多寄存器点位（int/float=2、double=4、string=1..32）的
+            // base+1..base+N-1 必须由协议给出，框架不做字符串偏移（偏移错一位读到别的寄存器，
+            // 且质量仍是 GOOD —— 最难排查的一类故障）。
+            .extensions(AddressExpansionExtension.class)
             .runtimeVersionRange("0.1.0", "1.0.0")
             .attribute("defaultPort", "502")
             .build();

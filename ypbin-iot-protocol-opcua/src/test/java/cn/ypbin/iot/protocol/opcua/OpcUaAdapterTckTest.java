@@ -38,6 +38,7 @@ import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolAdapter;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.test.tck.AbstractProtocolAdapterTckTest;
 import java.time.Duration;
 import java.util.List;
@@ -216,6 +217,39 @@ class OpcUaAdapterTckTest extends AbstractProtocolAdapterTckTest {
             // 重复取消必须幂等
             session.unsubscribe(handle).toCompletableFuture()
                     .orTimeout(15, TimeUnit.SECONDS).join();
+        } finally {
+            closeQuietly(session);
+        }
+    }
+
+    @Test
+    @DisplayName("OPC-06c 描述符必须声明 BATCH；一次订阅 2 个 NodeId 时两个节点都必须被推送")
+    void multiNodeSubscriptionMustDeliverBothNodes() {
+        // issue #37 缺口 2 的证据要求：声明 BATCH 前必须实测「一次请求多地址，每个地址都产出数据」，
+        // 不能凭「协议大概支持」就声明（若实际只订了第一个节点，宿主会静默丢掉其余点位）
+        assertThat(adapter.descriptor().subscriptionAddressing())
+                .isEqualTo(SubscriptionAddressing.BATCH);
+        server.updateValue("Temperature", 31.5D);
+        server.updateValue("Pressure", 1024L);
+        DeviceSession session = openSession();
+        List<String> receivedAddresses = new CopyOnWriteArrayList<>();
+        try {
+            SubscriptionHandle handle = session.subscribe(
+                            new SubscribeRequest(
+                                    List.of(PointAddress.of(server.nodeAddress("Temperature")),
+                                            PointAddress.of(server.nodeAddress("Pressure"))),
+                                    Duration.ofMillis(100), Duration.ofMillis(100), null, Map.of()),
+                            value -> receivedAddresses.add(value.address().raw()))
+                    .toCompletableFuture().orTimeout(15, TimeUnit.SECONDS).join();
+            assertThat(handle.addresses()).as("一次请求携带 2 个 NodeId").hasSize(2);
+
+            server.updateValue("Temperature", 32.5D);
+            server.updateValue("Pressure", 1025L);
+            awaitUntil(() -> receivedAddresses.stream().distinct().count() >= 2, Duration.ofSeconds(10));
+            assertThat(receivedAddresses)
+                    .as("两个 NodeId 都必须有推送 —— BATCH 声明的实质承诺")
+                    .contains(server.nodeAddress("Temperature"), server.nodeAddress("Pressure"));
+            session.unsubscribe(handle).toCompletableFuture().join();
         } finally {
             closeQuietly(session);
         }

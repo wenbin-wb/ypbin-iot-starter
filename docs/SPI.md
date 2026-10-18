@@ -1706,7 +1706,7 @@ record ValidationResult(boolean passed, List<String> reasons) {
  *
  * @param type     变更类型
  * @param device   变更后的设备规格；{@code REMOVE} 时携带被删除设备的规格（用于清理影子）
- * @param revision 单调递增的配置版本号，用于幂等与乱序保护
+ * @param revision 按设备单调递增的配置版本号，用于幂等与乱序保护
  * @author wenbin
  * @since 2026-09-13
  */
@@ -1722,6 +1722,33 @@ record DeviceChange(ChangeType type, DeviceSpec device, long revision) {
     }
 }
 ```
+
+#### revision 由框架分配（issue #38，`0.4.1` 起）
+
+**宿主不再需要自己维护 revision**。用 `DeviceRevisionAllocator`（`iot-core`，starter 自动注册为
+`@Bean @ConditionalOnMissingBean`）构造变更事件即可：
+
+```java
+// 推荐：框架按设备原子递增（1, 2, 3, ...）
+DeviceChange change = allocator.dispatch(ChangeType.UPDATE, spec);
+registry.notifyChange(change);   // 宿主自己的分发通道
+
+// 兼容：宿主已有自增（如数据库 config_version=100）时仍以宿主为准，取 max
+DeviceChange change = allocator.dispatch(ChangeType.UPDATE, spec, 100L); // revision = 100
+```
+
+语义（`DeviceRevisionAllocatorTest` REV-01~07 钉死）：
+
+| 场景 | 行为 |
+|---|---|
+| 同设备连续 `dispatch` | revision **严格递增**；不同设备**各自**从 1 开始、互不影响 |
+| 宿主传入更大值 | 取 `max(分配值, hostRevision)`，且后续分配从它继续（`dispatch(...,3)` 不会让 revision 回退） |
+| 设备被删除 | 调 `forget(deviceId)` 释放计数；重新加入时从 1 开始 |
+| 并发 | `AtomicLong`，8 线程 × 200 次不重号 |
+
+> **为什么必须递增**：`IotLifecycle` 丢弃 `revision <= 已应用值` 的事件（幂等 + 乱序保护）。
+> 宿主若漏递增，变更会被**永久丢弃、设备零数据**——所以框架把这个易错点收进分配器。
+> 该丢弃现在**不再是 debug 日志**：级别由 `ypbin.iot.devices.stale-revision-log-level` 控制（默认 `INFO`）。
 
 ### 8.1 设备影子不在本仓（边界声明）
 

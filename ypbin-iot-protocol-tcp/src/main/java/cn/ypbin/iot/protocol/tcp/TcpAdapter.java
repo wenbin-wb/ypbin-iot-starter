@@ -26,6 +26,7 @@ import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.core.util.Stages;
 import cn.ypbin.iot.transport.FramingSpec;
 import cn.ypbin.iot.transport.NettyChannelConnection;
@@ -91,6 +92,16 @@ public final class TcpAdapter implements ProtocolAdapter {
             .vendor("Netty")
             .transport("TCP")
             .capabilities(ProtocolCapability.WRITE, ProtocolCapability.SUBSCRIBE_STREAM)
+            // 显式声明为逐点位单订阅（与默认保守侧一致，但与「未声明」语义不同：
+            // 未声明意味着「协议作者没表态」，这里是协议作者明确表态）。
+            // 依据：非 key-value 形态下裸 TCP 帧没有寻址语义，TcpSession#subscribe 对
+            // addresses().size() > 1 直接 fail-fast（iot.tcp.subscribe.multi-address-unsupported）。
+            // key-value 形态（payload-format=key-value）确实支持一次订阅多个 selector，
+            // 但它是由**配置**而非协议身份决定的形态，声明是协议级的、无法随配置变化；
+            // 因此在声明层面取两种形态的交集（PER_ADDRESS，对两者都正确，代价是
+            // key-value 下 N 个点位拆成 N 次订阅）。若要为 key-value 放宽，需把
+            // 寻址方式做成「按设备配置」的能力而非协议级声明 —— 属后续独立设计。
+            .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
             .runtimeVersionRange("0.1.0", "1.0.0")
             .attribute("defaultPort", "0")
             .attribute("payloadFormat", "binary|text|number|key-value")

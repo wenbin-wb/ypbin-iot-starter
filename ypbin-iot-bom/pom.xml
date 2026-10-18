@@ -17,48 +17,129 @@
     <name>${project.artifactId}</name>
     <description>对外统一 BOM：宿主 import 本 BOM 即可管理所有 ypbin-iot-* 模块版本</description>
 
+    <!--
+      ⚠️ 对外 BOM 的两条硬约束（issue #36，两条都已被实测证明必需）：
+
+      ① 本 pom 的依赖版本**不得**使用 ${revision} 这种父链继承来的属性。
+      ② 安装时必须用 flatten 的 bom 模式**固化**（见文件末尾 build/plugins）。
+
+      为什么（实测证据，宿主 ypbin-iot 现象：期望 ypbin-starter-core 4.0.0，实际 0.4.0）：
+      父链 ypbin-iot-dependencies → ypbin-iot-starter → ypbin-starter-dependencies 中，
+      ypbin-starter 把 ypbin-starter-* 的版本写成了 ${revision}。宿主 import 本 BOM 时，
+      Maven 用**导入方（本 BOM）的上下文**展开这些继承来的 ${revision}，
+      于是 ypbin-starter-* 被顶成 IoT 的版本号；故障完全静默：编译能过、运行期行为漂移。
+
+      flatten 的 bom 模式把这两条一起满足：
+        · 安装出去的 pom **不含 <parent>** ⇒ 继承来的 ${revision} 条目整体消失；
+        · 本 pom 自己声明的属性被解析成**字面量**（${project.version} → 0.4.1-SNAPSHOT）；
+      再叠加显式 import 母仓 starter BOM，「宿主只引 iot-bom」即可拿到全部正确的 starter 版本。
+      tools/check-bom-no-revision.sh 断言「已安装 BOM 中无 ${revision}」。
+    -->
+    <properties>
+        <!-- 两个属性都**必须在本 pom 内显式声明**（flatten bom 模式会剥掉父 pom，
+             未在本地声明的属性会以 ${...} 字面量原样泄漏给宿主）。 -->
+        <!-- IoT 模块版本：${project.version} 由 flatten 解析成字面量，随根 pom 的 <revision> 走 -->
+        <iot-starter.version>${project.version}</iot-starter.version>
+        <!-- 母仓 starter 版本：必须等于根 pom 的 <parent><version>（升级父链时同步改这里） -->
+        <ypbin.starter.version>4.0.0</ypbin.starter.version>
+    </properties>
+
     <dependencyManagement>
         <dependencies>
+            <!-- 显式 import 母仓 BOM：宿主只引 iot-bom 时 starter 版本同样正确解析，
+                 不再依赖宿主 POM 里的声明顺序（issue #36） -->
+            <dependency>
+                <groupId>cn.ypbin</groupId>
+                <artifactId>ypbin-starter-bom</artifactId>
+                <version>${ypbin.starter.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-core</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-runtime</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-transport</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-spring-boot-starter</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-protocol-tcp</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-protocol-modbus</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-protocol-mqtt</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>cn.ypbin</groupId>
                 <artifactId>ypbin-iot-protocol-opcua</artifactId>
-                <version>${revision}</version>
+                <version>${iot-starter.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!--
+              ⚠️ 关键：对外 BOM 必须**固化**后再安装（issue #36 的真正修法）。
+
+              为什么仅把 ${revision} 换成显式属性还不够（已实测）：
+              本 BOM 的父链是 ypbin-iot-dependencies → ypbin-iot-starter → ypbin-starter-dependencies，
+              其中 ypbin-starter 作为「依赖管理仓」把 ypbin-starter-* 的版本写成了 ${revision}。
+              宿主 import 本 BOM 时，Maven 用**导入方（本 BOM）上下文**去展开这些继承来的
+              ${revision} —— 于是 ypbin-starter-* 被顶成 IoT 的版本号（实测期望 4.0.0、实际 0.4.0）。
+              这正是「编译能过、运行期行为漂移且完全静默」的根因。
+
+              flatten 的 bom 模式做了两件事，恰好把这根病根切断：
+                1) 安装出去的 pom **不含 <parent>**，继承来的 ${revision} 条目随之消失；
+                2) 本 pom 自己声明的属性被解析成字面量（${project.version} → 0.4.1-SNAPSHOT）。
+              加上显式 import ypbin-starter-bom，宿主「只引 iot-bom」也能拿到正确的 starter 版本。
+              tools/check-bom-no-revision.sh 断言「已安装 BOM 中无 ${revision}」。
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>flatten-maven-plugin</artifactId>
+                <configuration>
+                    <updatePomFile>true</updatePomFile>
+                    <flattenMode>bom</flattenMode>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>flatten</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>flatten</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>flatten-clean</id>
+                        <phase>clean</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

@@ -80,3 +80,37 @@
 - **不做协议库的封装层抽象**：直接暴露各协议库的能力边界（如 Modbus 地址形态固定、不猜测）。
 - **不做数据持久化/上云**：本仓只负责「连上、读写、订阅」，数据出口交给宿主的 `DataEgress`。
 - **不提供 OPC DA / PROFINET / LonWorks**（依赖原生栈，见 `docs/PROTOCOLS.md`）。
+
+## 设备 revision 契约（issue #38，`0.4.1` 起）
+
+`DeviceChange.revision` **按设备单调递增**，框架用它做幂等与乱序保护
+（`revision <= 已应用值` 的事件直接丢弃）。宿主有两种提供方式：
+
+| 方式 | 用法 | 说明 |
+|---|---|---|
+| **框架分配（推荐）** | `allocator.dispatch(type, device)` | `DeviceRevisionAllocator` 按设备 `AtomicLong` 原子递增；starter 自动注册为 `@Bean @ConditionalOnMissingBean`，宿主可替换实现 |
+| **宿主自增（兼容）** | `allocator.dispatch(type, device, hostRevision)` | 取 `max(分配值, hostRevision)`；宿主已有的更大版本号（如数据库 `config_version`）不会被框架压回 |
+
+**破坏性提醒**：宿主若自己维护 revision 且**漏递增**，该设备的变更会被永久丢弃、设备零数据。
+该丢弃自 `0.4.1` 起默认以 `INFO` 记录（配置 `ypbin.iot.devices.stale-revision-log-level`），
+不再静默——但正确的修法是改用框架分配器。
+
+## 设备级 bind 重试契约（issue #38，`0.4.1` 起）
+
+`IotLifecycle` 对 bind 失败按**设备**退避重试（瞬时失败）或立即放弃（永久失败），
+耗尽后通过 `DeviceEventListener` 发送 `CONNECT_FAILED` 事件、`messageKey` 为
+`iot.common.device.bind-retry-exhausted`、`cause` 为解包后的真实异常。
+
+**宿主必须实现的**：监听 `DeviceEventListener` 并在耗尽时更新设备状态/告警——
+框架不落库，不发事件就意味着宿主永远不知道这台设备已放弃恢复。
+参数见 `docs/RUNTIME.md` §3.3（`ypbin.iot.devices.rebind-*`）。
+
+## `ExponentialBackoff` 纯函数契约（issue #39，`0.4.1` 起）
+
+`cn.ypbin.iot.core.util.ExponentialBackoff.nextDelay(attempt, initial, max)` 是**纯函数**，
+供宿主复用（此前业务仓手写过两份且边界已分叉）：
+
+- `attempt` ＝ **已失败次数**：`0` 与 `1` 都返回 `initial`；
+- 之后每次翻倍，封顶于 `max`；指数上界 `2^20`（防溢出成负值导致退避变成忙循环）；
+- `initial > max` 时返回 `max`（配置写反不得让退避更长）；
+- 非法参数（`attempt < 0`、`initial <= 0`、`max <= 0`、`null`）**fail-fast 抛异常**，不静默返回 0。

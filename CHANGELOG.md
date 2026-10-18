@@ -11,6 +11,61 @@
 
 ## [未发布]
 
+### 新增
+
+- **订阅编排下沉到框架 `SubscriptionOrchestrator`（issue #37）**：框架此前只提供 `SubscribeRequest`
+  数据模型与 `DeviceSession#subscribe` 单次调用，**没有任何订阅编排的承接方**——「哪个点位要订、
+  什么时候重订、失败了怎么退避、部分成功怎么补」全留给宿主（下游 `AccessSubscriptionPlanner`
+  为此写了 639 行），而漏一条就是运行期故障：漏掉逐点位分流 ⇒ 裸 TCP 只交付第 0 个点位；
+  漏掉只补失败地址 ⇒ 每轮全量重订、同一点位重复读数；漏掉按会话实例判重订 ⇒ 重连后数据永久停更。
+  现在 `ypbin-iot-spring-boot-starter` 新增 `cn.ypbin.iot.spring.subscription.SubscriptionOrchestrator`
+  与 `SubscriptionOutcome` / `SubscriptionPoint` / `SubscriptionResult` / `SubscriptionStatus` /
+  `SubscriptionBackoffPolicy` / `ProtocolDescriptorSource`，内建六项能力：
+  - **整批 vs 逐点位分流**：判据来自 `ProtocolDescriptor.subscriptionAddressing()` 的**协议声明**
+    （新增 `SubscriptionAddressing` 枚举），不再由宿主按协议码 + `payload-format` 字符串硬编码；
+    未声明时按保守侧 `PER_ADDRESS` 处理（默认整批的失败模式是静默数据缺失，默认逐点位只损失效率）；
+  - **多寄存器地址展开**：点位只声明 `wordCount`，`base+1..base+N-1` 由协议声明的
+    **新增扩展接口 `AddressExpansionExtension`** 计算（框架不猜地址语法，避免偏移错一位）；
+    协议未声明该扩展时该点位**显式失败**而不是只订基址（半截字节 + GOOD 质量比直接失败更难排查）；
+  - **在途去重**：同设备同会话的并发订阅合并为一次真实调用；
+  - **部分成功只补失败地址**：`SubscriptionOutcome.retryAddresses()` 是唯一入口，已成功地址绝不重发；
+  - **按「设备 + 会话实例」指数退避**，配置项 `ypbin.iot.subscription.backoff.{initial-delay,max-delay,multiplier}`；
+    会话实例变了（重连新建会话）即视为新上下文、退避作废并立刻重订——判据用**对象身份**而非
+    `sessionId()` 字符串（协议模块的 sessionId 由「设备+链路」拼成，重连后可能完全相同）；
+  - **`@ConditionalOnMissingBean` 可被宿主整体覆盖**，并接入 `AutoConfiguration.imports`。
+  `ProtocolDescriptor` 新增字段带**旧 10 参数构造器重载**（委托为新构造器的「未声明」语义），
+  既有构造调用点零改动。测试：`SubscriptionOrchestratorTest` ORCH-01~23（分流/展开/只补失败/
+  并发去重/换会话重订/退避上限与重置）、`SubscriptionOrchestratorWiringTest` ORCHW-01~06
+  （imports 登记/默认装配/宿主覆盖/配置绑定/非法配置归一化/描述符来源接线）。变异验证：
+  把「只补失败地址」改为「全量重试」后 4 个对应用例转红，已还原。
+
+- **官方协议补齐订阅声明：Modbus 实现地址算术扩展，四个协议显式声明寻址方式（issue #37 缺口修复）**：
+  首版只有声明机制、没有协议实现，导致迁移后**多寄存器点位 100% 失败**（`wordCount>1` 时
+  找不到 `AddressExpansionExtension` 即整点位失败、连基址都不订），且四个官方协议全部落在默认
+  保守侧 `PER_ADDRESS`、订阅调用数按点位数放大。本次补齐：
+  - **Modbus 新增 `ModbusAddressExpansion`**（协议模块包内，无 Spring 注解）实现
+    `AddressExpansionExtension`，`ModbusSession.unwrap` 返回它、`ModbusAdapter` 描述符登记
+    `.extensions(AddressExpansionExtension.class)`。地址语义与宿主原实现一致
+    （`holding:0` → `holding:1`），传统 5 位编号基址（`40001`）归一为规范 `type:offset`
+    再偏移；**越界（offset+delta > 65535）显式抛 `AddressParseException` 而不回绕**
+    ——回绕会把「越界配置」变成「悄悄读到另一个寄存器的值」；`delta<1` 判非法；
+    `offset+delta` 用 `long` 运算，避免 int 溢出成负偏移绕过上界判断。
+  - **Modbus / MQTT / OPC UA 显式声明 `subscriptionAddressing = BATCH`**，TCP 显式声明
+    `PER_ADDRESS`。取舍：**默认值仍取保守侧**（未声明的第三方协议安全），官方协议按各自
+    `subscribe(request)` 的实测语义显式表态。每处声明都配了「一次请求多地址、每个地址都产出
+    数据」的实测用例，不凭协议印象声明：
+    `ModbusSubscriptionOrchestrationTest` MSO-01~04（真实适配器 + 真实 TCP 测试服务器，
+    `wordCount=2` 点位必须读到设备侧两个不同寄存器的值 `1111`/`2222`）、
+    `MqttMultiAddressSubscriptionTest` MPF-06/07（真实嵌入式 broker，一次请求 2 个主题、
+    两个主题都必须有数据）、`OpcUaAdapterTckTest` OPC-06c（一次请求 2 个 NodeId、两个节点
+    都必须被推送）、`TcpSessionBehaviourTest` TCP-10b（声明与 TCP-11 多地址 fail-fast 行为一致）。
+  - **TCP 为何不声明 BATCH**：非 key-value 形态下裸 TCP 帧没有寻址语义、多地址直接 fail-fast
+    （`iot.tcp.subscribe.multi-address-unsupported`）；key-value 形态虽支持多 selector，
+    但那是**配置**决定的形态，而 `subscriptionAddressing` 是**协议级**声明、无法随配置变化，
+    故取两种形态的交集。若将来要为 key-value 放宽，需把寻址方式做成「按设备配置」的能力。
+  变异验证：把 `ModbusAddressExpansion.offset` 改成不做偏移（直接返回基址）后
+  **7 个用例转红**（含端到端 `MSO-02`/`MSO-03` 与 `MAE-02~05`），已还原。
+
 ### 变更
 
 - **母 pom 父链 `ypbin-starter-dependencies` 3.8.0 → 4.0.0（issue #34）**：本仓**代码不依赖**母仓任何模块
@@ -20,6 +75,64 @@
     **声明顺序**来防止版本被顶掉——两个 BOM 现在来自同一基线；也不再出现「业务仓 4.0.0 / iot-starter 按 3.8.0 编译」
     的双基线。
   - **无 API 变更**：本仓源码一行未改，`mvn clean verify` 468 用例全绿、`tools/preflight.sh` 8/8 全过。
+
+- **对外 BOM 固化 + 显式属性（issue #36）**：`ypbin-iot-bom` 原先用 `${revision}` 声明 8 个 IoT 模块版本，
+  宿主 `import` 本 BOM 时 Maven 会用**导入方上下文**展开它；而父链 `ypbin-starter` 恰好把
+  `ypbin-starter-*` 的版本写成 `${revision}`，于是宿主的 starter 版本被顶成 IoT 的版本号
+  （实测：期望 `ypbin-starter-core` 4.0.0，实际 **0.4.0**）——编译能过、运行期行为漂移，且完全静默。
+  - 修法两条（都实测必需）：① BOM 自身的依赖版本改用显式属性（`${iot-starter.version}` /
+    显式 `import cn.ypbin:ypbin-starter-bom:${ypbin.starter.version}`）；② BOM 用
+    `flatten-maven-plugin` 的 `flattenMode=bom` **固化**后安装——安装出去的 pom 不带 `<parent>`，
+    继承来的 `${revision}` 条目整体消失，本地属性被解析成字面量。
+  - **宿主无需改任何 POM**：只需 `import cn.ypbin:ypbin-iot-bom`，「只引 iot-bom、不引 starter-bom」
+    也能解析到正确的 `ypbin-starter-*` 4.0.0（已用 `help:effective-pom` 逐项留证）。
+  - 新增发布门禁 `tools/check-bom-no-revision.sh`（接入 `tools/preflight.sh` 第 1 步）：
+    断言已安装的 `ypbin-iot-bom-*.pom` 中 `${revision}` 出现次数为 0，否则发布前直接失败。
+
+- **设备 revision 由框架分配（issue #38 其一）**：新增 `iot-core` 的 `DeviceRevisionAllocator`
+  （按设备 `AtomicLong` 原子递增；`dispatch(type, device)` 构造 `DeviceChange`；
+  `dispatch(type, device, hostRevision)` 取 `max(分配值, hostRevision)` 兼容宿主既有自增）。
+  宿主不再需要自己维护「按设备严格递增的 revision」——漏递增此前会让该设备的变更被**永久丢弃**且无日志。
+  starter 自动注册 `@Bean @ConditionalOnMissingBean DeviceRevisionAllocator`，宿主可替换。
+  测试：`DeviceRevisionAllocatorTest`（REV-01~07，含 8 线程 × 200 次并发不重号）。
+
+- **设备级 bind 退避重试（issue #38 其二）**：链路级 `ConnectionReconnector` 只覆盖「已绑定链路断开」，
+  「bind 本身失败」此前只记一行 WARN 就放弃 ⇒ 设备在配置变更后**永久离线**（宿主只能自己补一套重试）。
+  现在 `IotLifecycle` 区分**瞬时失败**（建链失败/探测不可达/acquire-bind 超时 ⇒ 退避重试）与
+  **永久失败**（无适配器/校验不通过/链路规格缺失/生命周期已关闭 ⇒ 立即放弃并如实记录），
+  重试按设备独立退避、逐轮上限、耗尽即停。
+  - 新配置（全部在 `ypbin.iot.devices.*`，均可热改）：`rebind-backoff-initial`（默认 `30s`）、
+    `rebind-backoff-max`（默认 `2min`）、`rebind-max-per-cycle`（默认 `20`）、
+    `rebind-max-attempts`（默认 `5`）。
+  - 耗尽时**记 WARN 带完整堆栈**并通过 `DeviceEventListener` 通知宿主（`CONNECT_FAILED` 事件，
+    cause 为解包后的真实原因）——框架不落库，宿主只能靠该事件更新设备状态/告警。
+  - 启动 bootstrap、`onDeviceChange`、显式 `bind()`、链路 `reconnect()` 四条路径统一接入；
+    `unbind`/REMOVE/`close()` 会取消待重试（避免把已解绑设备重新绑回来）。
+  - 测试：`LifecycleBindRetryTest`（BRT-01~08，含「每轮不超上限」「耗尽 WARN 带堆栈 + 事件通知」
+    「unbind 取消重试」「永久失败不重试」）。
+
+- **过期 revision 丢弃日志不再是 debug（issue #38 其三）**：`onDeviceChange` 丢弃
+  `revision <= 已应用值` 的变更时，日志级别由 `ypbin.iot.devices.stale-revision-log-level`
+  控制（默认 **INFO**；可选 DEBUG/INFO/WARN/ERROR）。日志内容包含设备、收到的 revision、
+  已应用 revision，并直接给出修复方向（改用 `DeviceRevisionAllocator`）。原因：这条日志对应
+  「设备永久零数据」的根因，固定在 debug 等于生产上不存在。
+
+- **指数退避上收为纯函数（issue #39 c）**：新增 `iot-core` 的 `ExponentialBackoff`
+  （`nextDelay(attempt, initial, max)` / `nextDelayMillis`）。业务仓此前在两处手写
+  `base × 2^(attempts-1)`，边界已经分叉（`attempts - 1` vs `Math.max(attempts,1) - 1`、
+  一处封顶一处不封顶）。现在起点（`attempt=0/1` 均为 initial）、翻倍、封顶、指数上界（2^20 防溢出）、
+  `initial > max`、非法参数 fail-fast 全部由框架钉死。测试：`ExponentialBackoffTest`（BO-01~06）。
+
+### 移交业务仓（`ypbin-iot`，本仓不改）
+
+以下三项经核实属于业务仓职责（本仓无对应代码），按 issue #39 约定**只做移交登记**：
+
+- **a) `MqttBinaryNumberDecoder`**：业务仓的 MQTT 二进制数值解码器应改为复用本仓
+  `BytePayloadDecoder` SPI（`0.4.0` 已提供），不必自建一套解码 + 注册机。
+- **b) 业务仓重复 `@Bean` 声明**：业务仓重复注册了本仓已自动装配的 Bean，应删除宿主侧声明，
+  改用本仓的 `@ConditionalOnMissingBean` 默认实现（需要定制时再覆盖）。
+- **d) 业务仓指标埋点**：错误码/指标的 `recordError` 调用点应在业务仓统一到本仓 `IotMessageKeys`
+  口径，避免同一失败在两处被记成不同错误码。
 
 ## [0.4.0] - 2026-10-17
 

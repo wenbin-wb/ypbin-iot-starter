@@ -37,6 +37,8 @@ import org.jspecify.annotations.Nullable;
  * @param minimumRuntimeVersion 要求的最低 iot-runtime 版本（含）
  * @param maximumRuntimeVersion 支持的最高 iot-runtime 版本（不含）
  * @param attributes            协议元信息（默认端口、规范编号等）
+ * @param subscriptionAddressing 订阅寻址方式：一次 {@code subscribe} 可携带几个地址
+ *                              （未声明时取 {@link SubscriptionAddressing#DEFAULT}）
  * @author wenbin
  * @since 2026-09-13
  */
@@ -50,7 +52,36 @@ public record ProtocolDescriptor(
         Set<Class<? extends ProtocolExtension>> extensions,
         String minimumRuntimeVersion,
         String maximumRuntimeVersion,
-        Map<String, String> attributes) {
+        Map<String, String> attributes,
+        SubscriptionAddressing subscriptionAddressing) {
+
+    /**
+     * 向后兼容构造器：不声明订阅寻址方式（等价于 {@link SubscriptionAddressing#DEFAULT}）。
+     *
+     * <p>保留它是为了<b>不破坏已发布的构造调用点</b>：新增字段若只留规范构造器，
+     * 任何直接 {@code new ProtocolDescriptor(...)} 的宿主机/第三方协议模块都会编译失败。
+     * 本重载委托给规范构造器，语义是「未声明」而不是「随便给个值」，
+     * 与 builder 未调用 {@code subscriptionAddressing(...)} 完全一致。</p>
+     *
+     * @param code                  协议标识
+     * @param name                  展示名
+     * @param vendor                底层协议栈来源
+     * @param stackVersion          底层协议栈版本
+     * @param transport             承载方式
+     * @param capabilities          能力集合
+     * @param extensions            扩展接口集合
+     * @param minimumRuntimeVersion 最低 iot-runtime 版本（含）
+     * @param maximumRuntimeVersion 最高 iot-runtime 版本（不含）
+     * @param attributes            协议元信息
+     */
+    public ProtocolDescriptor(ProtocolCode code, String name, String vendor, String stackVersion,
+            String transport, Set<ProtocolCapability> capabilities,
+            Set<Class<? extends ProtocolExtension>> extensions, String minimumRuntimeVersion,
+            String maximumRuntimeVersion, Map<String, String> attributes) {
+        this(code, name, vendor, stackVersion, transport, capabilities, extensions,
+                minimumRuntimeVersion, maximumRuntimeVersion, attributes,
+                SubscriptionAddressing.DEFAULT);
+    }
 
     /**
      * 紧凑构造器：归一化可空字段，避免下游到处判空。
@@ -66,6 +97,9 @@ public record ProtocolDescriptor(
         transport = transport == null ? "" : transport;
         minimumRuntimeVersion = minimumRuntimeVersion == null ? "" : minimumRuntimeVersion;
         maximumRuntimeVersion = maximumRuntimeVersion == null ? "" : maximumRuntimeVersion;
+        // 未声明 = 保守侧（逐点位单订阅）；理由见 SubscriptionAddressing#DEFAULT 的注释
+        subscriptionAddressing = subscriptionAddressing == null
+                ? SubscriptionAddressing.DEFAULT : subscriptionAddressing;
     }
 
     /**
@@ -125,6 +159,8 @@ public record ProtocolDescriptor(
         private String minimumRuntimeVersion = "";
 
         private String maximumRuntimeVersion = "";
+
+        private SubscriptionAddressing subscriptionAddressing = SubscriptionAddressing.DEFAULT;
 
         private Builder() {
         }
@@ -220,6 +256,22 @@ public record ProtocolDescriptor(
         }
 
         /**
+         * 声明订阅寻址方式：一次 {@code subscribe} 请求能携带几个地址。
+         *
+         * <p><b>必须由协议模块显式声明</b>：框架的订阅编排（{@code SubscriptionOrchestrator}）
+         * 据此决定「整批订阅」还是「逐点位单订阅」，不再由宿主按协议码字符串硬编码。
+         * 不调用本方法等价于 {@link SubscriptionAddressing#DEFAULT}（保守侧：逐点位单订阅）。</p>
+         *
+         * @param addressing 寻址方式（{@code null} 表示未声明，回落默认值）
+         * @return 当前构建器
+         */
+        public Builder subscriptionAddressing(SubscriptionAddressing addressing) {
+            this.subscriptionAddressing = addressing == null
+                    ? SubscriptionAddressing.DEFAULT : addressing;
+            return this;
+        }
+
+        /**
          * 设置支持的 iot-runtime 版本区间。
          *
          * @param minimum 最低版本（含）
@@ -259,7 +311,8 @@ public record ProtocolDescriptor(
                 throw new IllegalStateException("ProtocolDescriptor.name must be set before build()");
             }
             return new ProtocolDescriptor(code, name, vendor, stackVersion, transport,
-                    capabilities, extensions, minimumRuntimeVersion, maximumRuntimeVersion, attributes);
+                    capabilities, extensions, minimumRuntimeVersion, maximumRuntimeVersion, attributes,
+                    subscriptionAddressing);
         }
     }
 }
