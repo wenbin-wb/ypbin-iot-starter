@@ -15,6 +15,7 @@
  */
 package cn.ypbin.iot.spring.autoconfigure;
 
+import cn.ypbin.iot.core.context.LogLevel;
 import cn.ypbin.iot.core.model.ConnectionSpec;
 import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.egress.EgressOverflowPolicy;
@@ -248,16 +249,52 @@ public record IotProperties(
     /**
      * 设备接入配置。
      *
-     * @param enabled              是否在启动时自动接入设备
-     * @param defaultPollInterval  默认采集周期
-     * @param probeBeforeBind      绑定前是否先探测
+     * <p><b>设备级 bind 退避重试（issue #38）</b>：链路级重连（{@code ConnectionReconnector}）
+     * 只覆盖「已绑定的链路意外断开」；而「设备变更后 bind 失败」（建链失败、探测不可达、
+     * 链路未就绪等）此前<b>框架不重试</b>，设备会永久离线直到下一次变更。下面几项把宿主
+     * 自己写的 {@code REBIND_*} 常量上收到框架：框架按设备指数退避重试，
+     * 每个重试轮次最多处理 {@code rebind-max-per-cycle} 台设备（防止整批设备离线时同时打爆对端），
+     * 连续失败达到 {@code rebind-max-attempts} 次后记 <b>WARN 带完整堆栈</b>并通过
+     * {@link cn.ypbin.iot.core.spi.DeviceEventListener} 通知宿主。</p>
+     *
+     * @param enabled                是否在启动时自动接入设备
+     * @param defaultPollInterval    默认采集周期
+     * @param probeBeforeBind        绑定前是否先探测
+     * @param rebindBackoffInitial   设备级 bind 失败重试的初始退避
+     * @param rebindBackoffMax       设备级 bind 失败重试的退避上限
+     * @param rebindMaxPerCycle      每个重试轮次最多重试的设备数
+     * @param rebindMaxAttempts      连续失败多少次后判定「重试耗尽」并通知宿主
+     * @param staleRevisionLogLevel  过期 revision 丢弃日志的级别（默认 INFO，**不再**是 debug）
      * @author wenbin
      * @since 2026-09-13
      */
-    public record DeviceProperties(Boolean enabled, Duration defaultPollInterval, Boolean probeBeforeBind) {
+    public record DeviceProperties(
+            Boolean enabled,
+            Duration defaultPollInterval,
+            Boolean probeBeforeBind,
+            Duration rebindBackoffInitial,
+            Duration rebindBackoffMax,
+            Integer rebindMaxPerCycle,
+            Integer rebindMaxAttempts,
+            LogLevel staleRevisionLogLevel) {
 
         /** 默认采集周期。 */
         public static final Duration DEFAULT_POLL_INTERVAL = Duration.ofSeconds(5);
+
+        /** 设备级 bind 失败重试的默认初始退避（30s，取自宿主历史常量）。 */
+        public static final Duration DEFAULT_REBIND_BACKOFF_INITIAL = Duration.ofSeconds(30);
+
+        /** 设备级 bind 失败重试的默认退避上限（2min，取自宿主历史常量）。 */
+        public static final Duration DEFAULT_REBIND_BACKOFF_MAX = Duration.ofMinutes(2);
+
+        /** 每个重试轮次最多重试的设备数（20，取自宿主历史常量）。 */
+        public static final int DEFAULT_REBIND_MAX_PER_CYCLE = 20;
+
+        /** 连续失败多少次后判定重试耗尽（5 次 ≈ 30s+60s+120s+120s 的观测窗口）。 */
+        public static final int DEFAULT_REBIND_MAX_ATTEMPTS = 5;
+
+        /** 过期 revision 日志的默认级别：**非 debug**（debug 在生产上等于看不见）。 */
+        public static final LogLevel DEFAULT_STALE_REVISION_LOG_LEVEL = LogLevel.INFO;
 
         /**
          * 紧凑构造器：归一化默认值。
@@ -266,6 +303,18 @@ public record IotProperties(
             enabled = enabled == null ? Boolean.TRUE : enabled;
             defaultPollInterval = defaultPollInterval == null ? DEFAULT_POLL_INTERVAL : defaultPollInterval;
             probeBeforeBind = probeBeforeBind == null ? Boolean.FALSE : probeBeforeBind;
+            rebindBackoffInitial = positiveOrDefault(rebindBackoffInitial, DEFAULT_REBIND_BACKOFF_INITIAL);
+            rebindBackoffMax = positiveOrDefault(rebindBackoffMax, DEFAULT_REBIND_BACKOFF_MAX);
+            if (rebindBackoffMax.compareTo(rebindBackoffInitial) < 0) {
+                // 上限小于起点时以起点为准：否则退避「第一轮就封顶」，配置写反不会被察觉
+                rebindBackoffMax = rebindBackoffInitial;
+            }
+            rebindMaxPerCycle = rebindMaxPerCycle == null || rebindMaxPerCycle <= 0
+                    ? DEFAULT_REBIND_MAX_PER_CYCLE : rebindMaxPerCycle;
+            rebindMaxAttempts = rebindMaxAttempts == null || rebindMaxAttempts <= 0
+                    ? DEFAULT_REBIND_MAX_ATTEMPTS : rebindMaxAttempts;
+            staleRevisionLogLevel = staleRevisionLogLevel == null
+                    ? DEFAULT_STALE_REVISION_LOG_LEVEL : staleRevisionLogLevel;
         }
 
         /**
@@ -274,7 +323,10 @@ public record IotProperties(
          * @return 配置
          */
         public static DeviceProperties defaults() {
-            return new DeviceProperties(Boolean.TRUE, DEFAULT_POLL_INTERVAL, Boolean.FALSE);
+            return new DeviceProperties(Boolean.TRUE, DEFAULT_POLL_INTERVAL, Boolean.FALSE,
+                    DEFAULT_REBIND_BACKOFF_INITIAL, DEFAULT_REBIND_BACKOFF_MAX,
+                    DEFAULT_REBIND_MAX_PER_CYCLE, DEFAULT_REBIND_MAX_ATTEMPTS,
+                    DEFAULT_STALE_REVISION_LOG_LEVEL);
         }
 
         /**
@@ -293,6 +345,10 @@ public record IotProperties(
          */
         public boolean isProbeBeforeBind() {
             return Boolean.TRUE.equals(probeBeforeBind);
+        }
+
+        private static Duration positiveOrDefault(Duration value, Duration fallback) {
+            return value == null || value.isZero() || value.isNegative() ? fallback : value;
         }
     }
 
