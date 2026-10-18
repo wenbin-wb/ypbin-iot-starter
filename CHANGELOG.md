@@ -9,6 +9,18 @@
 **`0.4.0`（2026-10-17）**，均已发布到 Maven Central；其中 `0.1.0` 由 `ypbin-access`
 作为首个真实宿主接入验证。
 
+## [未发布]
+
+### 变更
+
+- **母 pom 父链 `ypbin-starter-dependencies` 3.8.0 → 4.0.0（issue #34）**：本仓**代码不依赖**母仓任何模块
+  （`grep cn.ypbin.starter` 零命中），父子关系只承袭「依赖版本管理 + 构建门禁（spotless/jacoco/nullaway/
+  dep-convergence/enforcer）」。
+  - **收益**：下游宿主（如 `ypbin-iot`）不再需要靠「先声明 `ypbin-starter-bom`、再声明 `ypbin-iot-bom`」的
+    **声明顺序**来防止版本被顶掉——两个 BOM 现在来自同一基线；也不再出现「业务仓 4.0.0 / iot-starter 按 3.8.0 编译」
+    的双基线。
+  - **无 API 变更**：本仓源码一行未改，`mvn clean verify` 468 用例全绿、`tools/preflight.sh` 8/8 全过。
+
 ## [0.4.0] - 2026-10-17
 
 ### 新增
