@@ -56,6 +56,27 @@
   发布后会被**传递**给依赖方 —— 这是有意为之（它是测试基座），但也意味着
   **生产代码不应依赖 `ypbin-iot-test`**。
 
+### 3.1 对外 BOM 的两条硬约束（issue #36）
+
+`ypbin-iot-bom` 是**唯一**对外承诺版本管理的制品，它有两个必须同时满足的约束，缺一即出现
+「宿主编译通过、运行期行为漂移且完全静默」的故障：
+
+1. **依赖版本不得使用 `${revision}` 这类父链继承属性**，改用本 pom 内显式声明的属性
+   （`${iot-starter.version}` / `${ypbin.starter.version}`）。
+2. **安装时必须走 `flatten-maven-plugin` 的 `flattenMode=bom` 固化**。原因：父链
+   `ypbin-starter` 把 `ypbin-starter-*` 的版本写成了 `${revision}`，宿主 `import` 本 BOM 时
+   Maven 会用**导入方上下文**展开它 ⇒ starter 版本被顶成 IoT 版本（实测期望 `4.0.0`、实际 `0.4.0`）。
+   flatten 的 bom 模式让安装出去的 pom **不带 `<parent>`**，继承来的 `${revision}` 条目整体消失，
+   本地属性被解析成字面量。
+
+因此**升级父链版本时，必须同步改 `ypbin-iot-bom/pom.xml` 的 `<ypbin.starter.version>`**
+（与根 pom `<parent><version>` 保持一致），否则宿主解析到的仍是旧 starter。
+
+发布前门禁 `tools/preflight.sh` 第 1 步会跑 `tools/check-bom-no-revision.sh`，
+断言已安装的 `ypbin-iot-bom-*.pom` 中 `${revision}` 出现 **0 次**。
+发布流程中因此**不能跳过 `install`**：该断言读的是本地仓库里真实安装的 pom，
+未安装时会直接失败（而不是静默跳过）。
+
 ## 四、版本迭代规范
 
 - `0.x` 阶段不提供兼容性承诺（见 `CONTRACT.md`）。

@@ -124,3 +124,17 @@ BAD 质量的 `qualityReason` 与指标标签 ⇒ 日志看到的键与指标标
 2. **代码 → 表**：协议层每个 `recordError(...)` 语句里出现的 `MSG_*` 常量都必须登记在本表。
 
 新增错误码而不接调用点（或删掉调用点）会让门禁变红。
+
+## 5. `iot.access.egress.dropped` 与本指标的关系（issue #39 d，业务仓侧待办）
+
+> 本节是对宿主口径的分歧登记，**不改本仓代码**；本仓只有 `ypbin.iot.errors` 这一个口径。
+
+业务仓 `ypbin-access` 另有一个指标 `iot.access.egress.dropped`
+（`HttpAccessReadingSink` 记录），与本节 `ypbin.iot.errors{type=iot.common.egress.dropped}`
+描述的是**同一件事**：读数在有界出口队列被丢弃。两个指标名并存会让看板口径分裂
+（同一故障两个名字，值班不知道该看哪个）。
+
+**明确口径（以本仓为准）**：`ypbin.iot.errors{type=iot.common.egress.dropped}` 是**唯一**
+的错误计数口径；`iot.access.egress.dropped` 若为不让既有看板失联而保留，它必须**只是**该计数的
+展示别名，且换算关系写死在业务仓文档里（**同一事件不得在两处各记一次**，
+否则汇总会翻倍）。本仓不实现、也无法校正业务仓侧的埋点。

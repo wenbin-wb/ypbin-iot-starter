@@ -25,9 +25,18 @@ import java.util.Objects;
  * 框架记录每个设备最后已应用的 revision，收到不大于它的变更直接丢弃（幂等），
  * 同时解决乱序到达问题。</p>
  *
+ * <p><b>{@code revision} 由框架分配，宿主不需自行维护</b>（issue #38）：
+ * 用 {@link DeviceRevisionAllocator#dispatch(ChangeType, DeviceSpec)}
+ * 构造变更即可，框架按设备原子递增；宿主已有的自增计数器（如数据库配置版本号）也仍可用——
+ * 走 {@link DeviceRevisionAllocator#dispatch(ChangeType, DeviceSpec, long)}
+ * 时框架取 {@code max(分配值, 传入值)}，不会被压回更小的值。
+ * 直接 {@code new DeviceChange(...)} 仍被支持（向后兼容），但此时宿主必须自己保证按设备严格递增，
+ * 否则变更会被当作过期事件丢弃（丢弃日志级别见
+ * {@code ypbin.iot.devices.stale-revision-log-level}）。</p>
+ *
  * @param type     变更类型
  * @param device   变更后的设备规格；{@code REMOVE} 时携带被删除设备的规格（用于清理影子）
- * @param revision 单调递增的配置版本号
+ * @param revision 单调递增的配置版本号（推荐由框架分配，见类注释）
  * @author wenbin
  * @since 2026-09-13
  */

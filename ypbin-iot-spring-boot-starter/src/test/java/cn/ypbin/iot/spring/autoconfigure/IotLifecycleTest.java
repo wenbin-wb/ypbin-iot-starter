@@ -219,7 +219,7 @@ class IotLifecycleTest {
     @DisplayName("LIFE-06 设备接入开关关闭时启动钩子不得绑定")
     void disabledDeviceBootstrapMustSkip() {
         IotProperties disabled = new IotProperties(true, null, null, null,
-                new IotProperties.DeviceProperties(false, null, null), null);
+                new IotProperties.DeviceProperties(false, null, null, null, null, null, null, null), null);
         IotLifecycle lifecycle = new IotLifecycle(adapterRegistry, connectionRegistry,
                 List.of(new StubDeviceRegistry(ValidationResult.ok())),
                 List.of(new StubSpecProvider(true)), disabled, scheduler);

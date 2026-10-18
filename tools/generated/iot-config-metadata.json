@@ -8,7 +8,7 @@
     "ypbin-iot-protocol-tcp",
     "ypbin-iot-spring-boot-starter"
   ],
-  "propertyCount": 53,
+  "propertyCount": 58,
   "properties": [
     {
       "name": "ypbin.iot.connection.connect-rate-jitter",
@@ -62,6 +62,46 @@
       "name": "ypbin.iot.devices.probe-before-bind",
       "type": "java.lang.Boolean",
       "description": "绑定前是否先探测",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.IotProperties$DeviceProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.devices.rebind-backoff-initial",
+      "type": "java.time.Duration",
+      "description": "设备级 bind 失败重试的初始退避",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.IotProperties$DeviceProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.devices.rebind-backoff-max",
+      "type": "java.time.Duration",
+      "description": "设备级 bind 失败重试的退避上限",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.IotProperties$DeviceProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.devices.rebind-max-attempts",
+      "type": "java.lang.Integer",
+      "description": "连续失败多少次后判定「重试耗尽」并通知宿主",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.IotProperties$DeviceProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.devices.rebind-max-per-cycle",
+      "type": "java.lang.Integer",
+      "description": "每个重试轮次最多重试的设备数",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.IotProperties$DeviceProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.devices.stale-revision-log-level",
+      "type": "cn.ypbin.iot.core.context.LogLevel",
+      "description": "过期 revision 丢弃日志的级别（默认 INFO，**不再**是 debug）",
       "defaultValue": null,
       "sourceType": "cn.ypbin.iot.spring.autoconfigure.IotProperties$DeviceProperties",
       "module": "ypbin-iot-spring-boot-starter"

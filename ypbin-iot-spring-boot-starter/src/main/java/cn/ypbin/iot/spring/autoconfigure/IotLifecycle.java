@@ -17,9 +17,13 @@ package cn.ypbin.iot.spring.autoconfigure;
 
 import cn.ypbin.iot.core.context.AdapterContext;
 import cn.ypbin.iot.core.context.AdapterSettings;
+import cn.ypbin.iot.core.context.LogLevel;
 import cn.ypbin.iot.core.context.TaskScheduler;
+import cn.ypbin.iot.core.i18n.IotMessageKeys;
 import cn.ypbin.iot.core.model.CloseCause;
 import cn.ypbin.iot.core.model.ConnectionSpec;
+import cn.ypbin.iot.core.model.DeviceEvent;
+import cn.ypbin.iot.core.model.DeviceEventType;
 import cn.ypbin.iot.core.model.DeviceSpec;
 import cn.ypbin.iot.core.model.ProbeResult;
 import cn.ypbin.iot.core.protocol.DeviceSession;
@@ -28,11 +32,13 @@ import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.spi.ChangeType;
 import cn.ypbin.iot.core.spi.ConnectionSpecProvider;
 import cn.ypbin.iot.core.spi.DeviceChange;
+import cn.ypbin.iot.core.spi.DeviceEventListener;
 import cn.ypbin.iot.core.spi.DeviceRegistry;
 import cn.ypbin.iot.core.spi.ValidationResult;
 import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.registry.AdapterRegistry;
 import cn.ypbin.iot.runtime.registry.ConnectionRegistry;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,10 +47,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -82,6 +91,12 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
 
     private final IotProperties properties;
 
+    /** 宿主设备事件监听器：bind 重试耗尽时据此通知宿主（issue #38）。 */
+    private final List<DeviceEventListener> eventListeners;
+
+    /** 时钟：事件时间戳统一取时（测试可注入固定时钟）。 */
+    private final Clock clock;
+
     private final Map<String, DeviceSession> sessions = new ConcurrentHashMap<>();
 
     private final Map<String, ConnectionRegistry.ConnectionHandle> handles = new ConcurrentHashMap<>();
@@ -97,6 +112,14 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
     /** 重连退避调度（按 connectionId 独立）。 */
     private final ConnectionReconnector reconnector;
 
+    /**
+     * 设备级 bind 退避重试（issue #38）。
+     *
+     * <p>链路级重连只覆盖「已绑定链路断开」；本字段负责「bind 本身失败」的设备级重试，
+     * 否则设备在配置变更后永久离线（宿主此前必须自己实现，见 {@link DeviceBindRetrier} 类注释）。</p>
+     */
+    private final DeviceBindRetrier bindRetrier;
+
     /** 设备当前生效的规格：重连时必须用同一份规格重新绑定。 */
     private final Map<String, DeviceSpec> deviceSpecs = new ConcurrentHashMap<>();
 
@@ -107,6 +130,26 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
     private final Set<String> watchedConnections = ConcurrentHashMap.newKeySet();
 
     /**
+     * 创建生命周期编排器（不注入设备事件监听器）。
+     *
+     * <p>该重载为直接 {@code new} 的单元测试与旧调用方保留；Spring 装配走带
+     * {@code listeners} 的重载，以便把「bind 重试耗尽」通知到宿主。</p>
+     *
+     * @param adapterRegistry    适配器注册中心
+     * @param connectionRegistry 连接注册中心
+     * @param deviceRegistries   设备来源实现
+     * @param specProviders      链路规格来源实现
+     * @param properties         配置
+     * @param taskScheduler      调度器
+     */
+    public IotLifecycle(AdapterRegistry adapterRegistry, ConnectionRegistry connectionRegistry,
+            List<DeviceRegistry> deviceRegistries, List<ConnectionSpecProvider> specProviders,
+            IotProperties properties, TaskScheduler taskScheduler) {
+        this(adapterRegistry, connectionRegistry, deviceRegistries, specProviders, properties,
+                taskScheduler, List.of(), Clock.systemUTC());
+    }
+
+    /**
      * 创建生命周期编排器。
      *
      * @param adapterRegistry    适配器注册中心
@@ -114,18 +157,25 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
      * @param deviceRegistries   设备来源实现
      * @param specProviders      链路规格来源实现
      * @param properties         配置
+     * @param taskScheduler      调度器
+     * @param listeners          宿主设备事件监听器（bind 重试耗尽时通知）
+     * @param clock              时钟（事件时间戳）
      */
     public IotLifecycle(AdapterRegistry adapterRegistry, ConnectionRegistry connectionRegistry,
             List<DeviceRegistry> deviceRegistries, List<ConnectionSpecProvider> specProviders,
-            IotProperties properties, TaskScheduler taskScheduler) {
+            IotProperties properties, TaskScheduler taskScheduler,
+            List<DeviceEventListener> listeners, Clock clock) {
+        this.eventListeners = listeners == null ? List.of() : List.copyOf(listeners);
+        this.clock = clock == null ? Clock.systemUTC() : clock;
         this.adapterRegistry = adapterRegistry;
         this.connectionRegistry = connectionRegistry;
         this.deviceRegistries = deviceRegistries == null ? List.of() : List.copyOf(deviceRegistries);
         this.specProviders = specProviders == null ? List.of() : List.copyOf(specProviders);
         this.properties = properties;
-        this.reconnector = new ConnectionReconnector(
-                Objects.requireNonNull(taskScheduler, "taskScheduler must not be null"),
-                this::reconnect);
+        TaskScheduler scheduler = Objects.requireNonNull(taskScheduler, "taskScheduler must not be null");
+        this.reconnector = new ConnectionReconnector(scheduler, this::reconnect);
+        this.bindRetrier = new DeviceBindRetrier(scheduler, this.properties.devices(),
+                this::attemptBind, this::onBindRetryExhausted);
     }
 
     @Override
@@ -151,15 +201,22 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         }
         int bound = 0;
         int failed = 0;
+        int retrying = 0;
         for (DeviceSpec device : devices) {
-            if (bind(device)) {
+            DeviceBindRetrier.Outcome outcome = attemptBind(device);
+            if (outcome.success()) {
                 bound++;
-            } else {
-                failed++;
+                continue;
+            }
+            failed++;
+            if (outcome.retryable()) {
+                // 启动瞬间设备离线是最常见形态：不重试就等于「开机即永久零数据」
+                bindRetrier.schedule(device);
+                retrying++;
             }
         }
-        log.info("[ypbin-iot] device bootstrap finished: total={}, bound={}, failed={}",
-                devices.size(), bound, failed);
+        log.info("[ypbin-iot] device bootstrap finished: total={}, bound={}, failed={} ({} scheduled for "
+                + "device-level bind retry)", devices.size(), bound, failed, retrying);
     }
 
     /**
@@ -169,28 +226,48 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
      * @return 成功返回 {@code true}
      */
     public boolean bind(DeviceSpec device) {
+        DeviceBindRetrier.Outcome outcome = attemptBind(device);
+        if (!outcome.success() && outcome.retryable()) {
+            // 显式调用方同样享受设备级重试：宿主调 bind 失败后不必自己安排重试
+            bindRetrier.schedule(device);
+        }
+        return outcome.success();
+    }
+
+    /**
+     * 尝试接入单个设备，并给出「是否值得重试」的判定（issue #38）。
+     *
+     * <p>与 {@link #bind(DeviceSpec)} 的区别只在返回值：这里区分
+     * <b>瞬时失败</b>（建链失败、探测不可达、acquire/bind 超时——值得退避重试）
+     * 与 <b>永久失败</b>（无适配器、校验不通过、链路规格缺失、生命周期已关闭——重试没有意义）。
+     * 判定依据是「换时间再试是否可能成功」，不是「异常类型」。</p>
+     *
+     * @param device 设备规格
+     * @return 尝试结果（永不返回 {@code null}）
+     */
+    private DeviceBindRetrier.Outcome attemptBind(DeviceSpec device) {
         if (closed.get()) {
             log.warn("[ypbin-iot] lifecycle already closed; refusing to bind device {}", device.deviceId());
-            return false;
+            return DeviceBindRetrier.Outcome.permanent(null);
         }
         Optional<ProtocolAdapter> adapterOptional = adapterRegistry.find(device.protocol());
         Optional<AdapterContext> contextOptional = adapterRegistry.contextOf(device.protocol());
         if (adapterOptional.isEmpty() || contextOptional.isEmpty()) {
             log.warn("[ypbin-iot] no adapter registered for device {} protocol {}",
                     device.deviceId(), device.protocol());
-            return false;
+            return DeviceBindRetrier.Outcome.permanent(null);
         }
         ValidationResult validation = validate(device);
         if (!validation.passed()) {
             log.warn("[ypbin-iot] device {} rejected by validation: {}",
                     device.deviceId(), validation.reasons());
-            return false;
+            return DeviceBindRetrier.Outcome.permanent(null);
         }
         Optional<ConnectionSpec> specOptional = resolveSpec(device.connectionId());
         if (specOptional.isEmpty()) {
             log.warn("[ypbin-iot] no connection spec found for device {} connectionId {}",
                     device.deviceId(), device.connectionId());
-            return false;
+            return DeviceBindRetrier.Outcome.permanent(null);
         }
         ProtocolAdapter adapter = adapterOptional.get();
         AdapterContext context = contextOptional.get();
@@ -209,7 +286,8 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             if (probe == null || !probe.reachable()) {
                 log.warn("[ypbin-iot] device {} skipped: probe before bind reported unreachable ({})",
                         device.deviceId(), probe == null ? "probe failed" : probe.failureReason());
-                return false;
+                // 探测不可达是典型的瞬时失败（对端离线/网络抖动）：值得设备级退避重试
+                return DeviceBindRetrier.Outcome.retryable(null);
             }
         }
         try {
@@ -232,7 +310,7 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
                 handle.release();
                 log.error("[ypbin-iot] bind failed for device {}; connection released to avoid quota leak",
                         device.deviceId(), ex);
-                return false;
+                return DeviceBindRetrier.Outcome.retryable(unwrap(ex));
             }
             if (closed.get()) {
                 // close() 与在途 bind 交错：绑定期间生命周期已被关闭，必须立即撤销，
@@ -244,7 +322,7 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
                 handle.release();
                 log.warn("[ypbin-iot] lifecycle closed during bind; device {} rolled back.",
                         device.deviceId());
-                return false;
+                return DeviceBindRetrier.Outcome.permanent(null);
             }
             sessions.put(device.deviceId(), session);
             handles.put(device.deviceId(), handle);
@@ -255,10 +333,11 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             // 绑定成功即挂监听：链路意外关闭时这台设备要能自动恢复
             watchConnection(device.connectionId(), handle.connection());
             log.debug("[ypbin-iot] device {} bound to session {}.", device.deviceId(), session.sessionId());
-            return true;
+            return DeviceBindRetrier.Outcome.ok();
         } catch (RuntimeException ex) {
             log.error("[ypbin-iot] failed to bind device {}", device.deviceId(), ex);
-            return false;
+            // 建链/绑定异常（超时、连接被拒、协议错误）通常是瞬时的：值得退避重试
+            return DeviceBindRetrier.Outcome.retryable(unwrap(ex));
         }
     }
 
@@ -288,6 +367,8 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
      * @return 此前存在绑定或句柄则返回 {@code true}
      */
     public boolean unbind(String deviceId) {
+        // 显式解绑即「不再接入」：取消该设备所有待重试，否则解绑后它还会被重试逻辑绑回来
+        bindRetrier.cancel(deviceId);
         boolean detached = detach(deviceId);
         // 公开的 unbind 语义是「这台设备不再接入」：连归属一起清除，
         // 若它是该链路最后一台设备则停掉重连（否则会为一条没人用的链路反复重试）
@@ -332,6 +413,17 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
      * <p>幂等：{@code revision} 不大于已应用值时直接丢弃。同一设备的变更按设备级锁串行，
      * 且统一走「先解绑再绑定」，避免切换窗口内出现新旧会话双活。</p>
      *
+     * <p><b>两个「静默零数据」防线的落点（issue #38）</b>：</p>
+     * <ul>
+     *   <li><b>过期 revision 丢弃</b>不再是 debug：级别由
+     *       {@code ypbin.iot.devices.stale-revision-log-level} 配置（默认 {@code INFO}）。
+     *       原因：宿主的 revision 计数一旦漏递增，变更就被永久丢弃、设备零数据，
+     *       而 debug 日志在生产环境上等于不存在。日志里同时给出「如何修复」的提示与计数器值。</li>
+     *   <li><b>bind 失败</b>不再只记一行 WARN 了事：交给 {@link DeviceBindRetrier} 按设备退避重试，
+     *       耗尽后由 {@link #onBindRetryExhausted} 记 WARN 带完整堆栈并通知
+     *       {@link DeviceEventListener}。</li>
+     * </ul>
+     *
      * @param change 变更事件
      */
     public void onDeviceChange(DeviceChange change) {
@@ -341,24 +433,101 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         try {
             long applied = appliedRevisions.getOrDefault(deviceId, Long.MIN_VALUE);
             if (change.revision() <= applied) {
-                log.debug("[ypbin-iot] stale device change ignored: device={} revision={} applied={}",
-                        deviceId, change.revision(), applied);
+                logStaleRevision(deviceId, change.revision(), applied);
                 return;
             }
             appliedRevisions.put(deviceId, change.revision());
             if (change.type() == ChangeType.REMOVE) {
                 unbind(deviceId);
+                bindRetrier.cancel(deviceId);
                 forgetDevice(deviceId);
                 deviceLocks.remove(deviceId);
                 appliedRevisions.remove(deviceId);
                 return;
             }
-            if (!bind(change.device())) {
-                log.warn("[ypbin-iot] device change not applied: device={} type={}",
-                        deviceId, change.type());
+            DeviceBindRetrier.Outcome outcome = attemptBind(change.device());
+            if (outcome.success()) {
+                // 配置变更成功：该设备此前若在等待重试，直接取消（否则会再 bind 一次）
+                bindRetrier.cancel(deviceId);
+                return;
             }
+            if (outcome.retryable()) {
+                log.warn("[ypbin-iot] device change not applied: device={} type={}; scheduling "
+                        + "device-level bind retry (see ypbin.iot.devices.rebind-backoff-initial/-max).",
+                        deviceId, change.type(), outcome.cause());
+                bindRetrier.schedule(change.device());
+                return;
+            }
+            // 永久失败（配置非法、无适配器、规格缺失）：重试没有意义，如实记录即可
+            log.warn("[ypbin-iot] device change not applied and will NOT be retried: device={} type={} "
+                    + "(configuration problem, fix the device definition and push the change again).",
+                    deviceId, change.type(), outcome.cause());
         } finally {
             deviceLock.unlock();
+        }
+    }
+
+    /**
+     * 记录「过期 revision 被丢弃」。
+     *
+     * <p><b>刻意不用固定 debug</b>：这条日志对应「设备永久零数据」的根因，
+     * 宿主侧曾经注释自证「≤ 已应用值的变更被直接丢弃且没有任何日志」。
+     * 默认级别 {@code INFO}，可配（{@code ypbin.iot.devices.stale-revision-log-level}）。</p>
+     *
+     * @param deviceId 设备标识
+     * @param revision 收到的 revision
+     * @param applied  已应用的 revision
+     */
+    private void logStaleRevision(String deviceId, long revision, long applied) {
+        LogLevel level = properties.devices().staleRevisionLogLevel();
+        // 刻意不用 switch-on-enum：javac 会编译成 ordinal() 查表，触发「禁 ordinal」门禁误报
+        if (level == LogLevel.ERROR) {
+            log.error("[ypbin-iot] stale device change ignored: device={} revision={} applied={} —— "
+                    + "宿主必须按设备严格递增 revision（推荐改用框架的 DeviceRevisionAllocator）；"
+                    + "revision 漏递增会让该设备的变更被永久丢弃、设备零数据。",
+                    deviceId, revision, applied);
+        } else if (level == LogLevel.WARN) {
+            log.warn("[ypbin-iot] stale device change ignored: device={} revision={} applied={} —— "
+                    + "宿主必须按设备严格递增 revision（推荐改用框架的 DeviceRevisionAllocator）；"
+                    + "revision 漏递增会让该设备的变更被永久丢弃、设备零数据。",
+                    deviceId, revision, applied);
+        } else if (level == LogLevel.INFO) {
+            log.info("[ypbin-iot] stale device change ignored: device={} revision={} applied={} —— "
+                    + "宿主必须按设备严格递增 revision（推荐改用框架的 DeviceRevisionAllocator）；"
+                    + "revision 漏递增会让该设备的变更被永久丢弃、设备零数据。",
+                    deviceId, revision, applied);
+        } else {
+            log.debug("[ypbin-iot] stale device change ignored: device={} revision={} applied={}.",
+                    deviceId, revision, applied);
+        }
+    }
+
+    /**
+     * 重试耗尽：记 WARN 带完整堆栈，并通知宿主。
+     *
+     * <p><b>通知宿主而不是只打日志</b>：设备离线到「框架放弃重试」是需要告警的事件，
+     * 宿主只有通过 {@link DeviceEventListener} 才能更新设备状态/告警（框架不落库）。
+     * 通知异常不得影响重试器状态机：监听器是宿主的代码，其缺陷不能反过来搞坏框架。</p>
+     *
+     * @param device   设备规格
+     * @param attempts 失败尝试次数
+     * @param cause    最后一次失败原因（可能为空）
+     */
+    private void onBindRetryExhausted(DeviceSpec device, int attempts, @Nullable Throwable cause) {
+        // 完整堆栈必须传给日志：只有一行消息时现场无法判断是超时、拒绝还是协议错误
+        log.warn("[ypbin-iot] device {} bind retry exhausted after {} attempt(s); giving up and "
+                + "notifying listeners. The device stays OFFLINE with NO data until the next change.",
+                device.deviceId(), attempts, cause);
+        DeviceEvent event = new DeviceEvent(device.deviceId(), device.protocol(),
+                DeviceEventType.CONNECT_FAILED, IotMessageKeys.DEVICE_BIND_RETRY_EXHAUSTED, cause,
+                clock.instant());
+        for (DeviceEventListener listener : eventListeners) {
+            try {
+                listener.onEvent(event);
+            } catch (RuntimeException ex) {
+                log.error("[ypbin-iot] device event listener {} failed while handling bind-retry "
+                        + "exhaustion of device {}", listener.getClass().getName(), device.deviceId(), ex);
+            }
         }
     }
 
@@ -435,6 +604,8 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
                 continue;
             }
             if (!bind(spec)) {
+                // 链路重连里 bind 失败：同样进入设备级退避重试（否则链路恢复后这台设备仍永久离线）
+                bindRetrier.schedule(spec);
                 allBound = false;
                 continue;
             }
@@ -498,6 +669,42 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
     }
 
     /**
+     * 当前等待 bind 重试的设备数（诊断用）。
+     *
+     * @return 设备数
+     */
+    public int bindRetryPendingCount() {
+        return bindRetrier.pendingCount();
+    }
+
+    /**
+     * 累计 bind 重试次数（诊断用）。
+     *
+     * @return 次数
+     */
+    public int bindRetryAttempts() {
+        return bindRetrier.totalAttempts();
+    }
+
+    /**
+     * 累计「重试后恢复」的设备次数（诊断用）。
+     *
+     * @return 次数
+     */
+    public int bindRetryRecovered() {
+        return bindRetrier.totalRecovered();
+    }
+
+    /**
+     * 累计「重试耗尽」的设备次数（诊断用）。
+     *
+     * @return 次数
+     */
+    public int bindRetryExhausted() {
+        return bindRetrier.totalExhausted();
+    }
+
+    /**
      * 探测一条链路（供诊断使用）。
      *
      * @param spec 链路规格
@@ -536,7 +743,8 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        // 必须先停重连：否则关闭过程中被解绑的设备会被重连逻辑重新绑回来
+        // 必须先停重试与重连：否则关闭过程中被解绑的设备会被重试/重连逻辑重新绑回来
+        bindRetrier.close();
         reconnector.close();
         int count = sessions.size();
         for (String deviceId : new ArrayList<>(sessions.keySet())) {
@@ -583,6 +791,26 @@ public final class IotLifecycle implements ApplicationListener<ApplicationReadyE
             return spec;
         }
         return spec.withConnectTimeout(configured);
+    }
+
+    /**
+     * 剥掉 {@link CompletionException}/{@link ExecutionException} 包装，取出真正的原因。
+     *
+     * <p><b>为什么要剥</b>：异步 bind 失败经 {@code join()} 抛出时外面套了
+     * {@code CompletionException}。若把它原样交给重试器，耗尽时打的堆栈首行是
+     * 「java.util.concurrent.CompletionException」、事件携带的 cause 也是包装类 ——
+     * 宿主按异常类型告警分类会全部落到同一个桶里，等于没有分类。剥到最内层原因即可。</p>
+     *
+     * @param error 捕获到的异常（非空）
+     * @return 最内层原因（至少返回入参本身，永不返回 {@code null}）
+     */
+    private static Throwable unwrap(Throwable error) {
+        Throwable current = error;
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private ValidationResult validate(DeviceSpec device) {

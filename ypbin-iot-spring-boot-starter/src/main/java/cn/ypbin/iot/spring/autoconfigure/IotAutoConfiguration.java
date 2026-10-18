@@ -28,6 +28,7 @@ import cn.ypbin.iot.core.spi.ConnectionSpecProvider;
 import cn.ypbin.iot.core.spi.DataSink;
 import cn.ypbin.iot.core.spi.DeviceEventListener;
 import cn.ypbin.iot.core.spi.DeviceRegistry;
+import cn.ypbin.iot.core.spi.DeviceRevisionAllocator;
 import cn.ypbin.iot.runtime.context.DefaultAdapterContext;
 import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.context.EnvCredentialResolver;
@@ -271,6 +272,23 @@ public class IotAutoConfiguration {
     }
 
     /**
+     * 设备 revision 分配器：宿主不必再自己维护「按设备递增的 revision」（issue #38）。
+     *
+     * <p>宿主通过 {@code allocator.dispatch(type, device)} 构造 {@link DeviceChange}，
+     * 框架按设备原子递增；宿主已有的更大 revision（如数据库配置版本号）走
+     * {@code dispatch(type, device, hostRevision)} 仍生效（取 {@code max}）。
+     * Bean 带 {@link ConditionalOnMissingBean}：宿主可替换为实现自己的分配策略。</p>
+     *
+     * @return revision 分配器
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public DeviceRevisionAllocator iotDeviceRevisionAllocator() {
+        log.debug("[ypbin-iot] iotDeviceRevisionAllocator configured.");
+        return new DeviceRevisionAllocator();
+    }
+
+    /**
      * 接入生命周期编排：容器就绪后建链绑定，关闭时优雅解绑。
      *
      * @param adapterRegistry    适配器注册中心
@@ -285,12 +303,15 @@ public class IotAutoConfiguration {
     public IotLifecycle iotLifecycle(AdapterRegistry adapterRegistry, ConnectionRegistry connectionRegistry,
             ObjectProvider<DeviceRegistry> deviceRegistries,
             ObjectProvider<ConnectionSpecProvider> specProviders, IotProperties properties,
-            TaskScheduler taskScheduler) {
+            TaskScheduler taskScheduler, ObjectProvider<DeviceEventListener> listeners, Clock clock) {
         List<DeviceRegistry> registries = deviceRegistries.orderedStream().toList();
         List<ConnectionSpecProvider> providers = specProviders.orderedStream().toList();
-        log.debug("[ypbin-iot] iotLifecycle configured (deviceRegistries={}, specProviders={}).",
-                registries.size(), providers.size());
+        List<DeviceEventListener> listenerList = listeners.orderedStream().toList();
+        log.debug("[ypbin-iot] iotLifecycle configured (deviceRegistries={}, specProviders={}, "
+                        + "deviceEventListeners={}, rebind-backoff-initial={}, rebind-max-per-cycle={}).",
+                registries.size(), providers.size(), listenerList.size(),
+                properties.devices().rebindBackoffInitial(), properties.devices().rebindMaxPerCycle());
         return new IotLifecycle(adapterRegistry, connectionRegistry, registries, providers, properties,
-                taskScheduler);
+                taskScheduler, listenerList, clock);
     }
 }

@@ -221,6 +221,43 @@ public record DeviceChange(
 - 框架记录每个设备的**最后已应用 revision**，收到 `revision <= lastApplied` 的事件**直接丢弃**（幂等）；
 - 这同时解决了「乱序到达」问题——旧事件不会覆盖新配置。
 
+#### 放弃重试与过期 revision 的两个静默故障点（issue #38，`0.4.1` 起已修）
+
+这两类缺陷的共同特征是**没有报错、没有异常、只是没有数据**，因此必须在日志与告警上显式暴露：
+
+| 故障点 | 旧行为 | 现行为 |
+|---|---|---|
+| **过期 revision 被丢弃** | 只有 `debug` 日志 ⇒ 生产上等于不存在；宿主漏递增 revision 时，设备变更被永久丢弃、设备零数据，现场无从发现 | 级别由 `ypbin.iot.devices.stale-revision-log-level` 控制（默认 **`INFO`**，可选 `DEBUG`/`INFO`/`WARN`/`ERROR`）；日志含设备、收到的 revision、已应用 revision，并直接提示改用 `DeviceRevisionAllocator` |
+| **`bind` 失败** | 只记一行 `WARN` 后放弃 ⇒ 设备在配置变更后**永久离线**，宿主只能自己补重试 | 区分瞬时/永久失败，**瞬时失败按设备退避重试**（见下），耗尽时 `WARN` 带完整堆栈 + 通过 `DeviceEventListener` 通知宿主 |
+
+#### 设备级 bind 退避重试
+
+链路级重连（`ConnectionReconnector`）只覆盖「已绑定链路断开」；`bind` 本身失败走**设备级**重试：
+
+- **瞬时失败 → 重试**：建链失败、`probe` 不可达、`acquire`/`bind` 超时、绑定抛异常（连接被拒、协议错误）。
+  判定依据是「换时间再试是否可能成功」，不是异常类型。
+- **永久失败 → 立即放弃**：无适配器、校验不通过、链路规格缺失、生命周期已关闭。继续重试没有意义，
+  只记 `WARN`（并说明是配置问题）而不占用重试队列。
+- **退避**：`ExponentialBackoff`（初始 `rebind-backoff-initial` → 翻倍 → 封顶 `rebind-backoff-max`），
+  **按设备独立**，不同设备互不拖累。
+- **逐轮上限**：每个重试轮次最多处理 `rebind-max-per-cycle` 台设备（按下次到期时间排序，先到期先试），
+  防止「整批设备同时离线」时一轮打爆对端。
+- **耗尽即停**：连续失败 `rebind-max-attempts` 次后停止重试并通知宿主，
+  设备**保持离线、不产数据**直到下一次配置变更——不会无限重试刷屏。
+- **取消时机**：`unbind`、`REMOVE` 事件、`close()` 都会取消该设备的待重试
+  （否则解绑后它会被重试逻辑重新绑回来）。
+
+| 配置项（`ypbin.iot.devices.*`） | 默认值 | 说明 |
+|---|---|---|
+| `rebind-backoff-initial` | `30s` | 首次重试前的等待 |
+| `rebind-backoff-max` | `2min` | 退避上限（`initial > max` 时以 `max` 为准） |
+| `rebind-max-per-cycle` | `20` | 单轮最多重试设备数 |
+| `rebind-max-attempts` | `5` | 连续失败多少次判定耗尽并通知宿主 |
+| `stale-revision-log-level` | `INFO` | 过期 revision 丢弃日志级别 |
+
+耗尽时向宿主发送 `DeviceEvent(deviceId, protocol, CONNECT_FAILED, iot.common.device.bind-retry-exhausted, cause, occurredAt)`，
+`cause` 为**解包后**的真实原因（剥掉 `CompletionException`/`ExecutionException`，便于宿主按异常类型分类告警）。
+
 ### 3.4 配置回滚
 
 - **不建议在框架内做配置版本快照与回滚**。理由：配置的**权威存储**在宿主（admin 的业务库），
