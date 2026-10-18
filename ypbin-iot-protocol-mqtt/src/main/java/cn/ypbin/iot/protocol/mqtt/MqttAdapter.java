@@ -28,6 +28,7 @@ import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.core.util.Stages;
 import cn.ypbin.iot.protocol.mqtt.autoconfigure.MqttProperties;
 import com.hivemq.client.mqtt.mqtt3.Mqtt3AsyncClient;
@@ -124,6 +125,10 @@ public final class MqttAdapter implements ProtocolAdapter {
             .transport("TCP/WEBSOCKET/TLS")
             .capabilities(ProtocolCapability.WRITE, ProtocolCapability.SUBSCRIBE_NATIVE,
                     ProtocolCapability.MULTI_DEVICE_LINK)
+            // 一次订阅可携带多个主题过滤器：MqttSession#subscribe 遍历 request.addresses()
+            // 逐个 filter 订阅，每个主题回调都把实际 topic 作为 PointAddress 派发，
+            // 因此多地址订阅是原生支持的（见 MqttSessionBehaviourTest 的多主题用例）。
+            .subscriptionAddressing(SubscriptionAddressing.BATCH)
             .runtimeVersionRange("0.1.0", "1.0.0")
             .attribute("defaultPort", String.valueOf(DEFAULT_PORT))
             .build();
