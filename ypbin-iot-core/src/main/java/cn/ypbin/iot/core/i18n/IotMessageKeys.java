@@ -85,6 +85,9 @@ public final class IotMessageKeys {
     /** 未知配置项。 */
     public static final String CONFIG_UNKNOWN_KEY = CONFIG_PREFIX + "unknown-key";
 
+    /** 设备级 bind 重试耗尽（issue #38）：参数为设备标识与尝试次数。 */
+    public static final String DEVICE_BIND_RETRY_EXHAUSTED = "iot.common.device.bind-retry-exhausted";
+
     private IotMessageKeys() {
     }
 }
