@@ -42,9 +42,11 @@ import cn.ypbin.iot.core.model.SubscribeRequest;
 import cn.ypbin.iot.core.model.TlsOptions;
 import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
+import cn.ypbin.iot.core.protocol.AddressExpansionExtension;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.runtime.context.DefaultAdapterContext;
 import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.context.EnvCredentialResolver;
@@ -460,7 +462,12 @@ class ModbusEdgeCaseTest {
         assertThat(adapter.descriptor().name()).isEqualTo("Modbus");
         assertThat(adapter.descriptor().stackVersion()).isEqualTo("2.1.6");
         assertThat(adapter.capabilities()).isEqualTo(adapter.descriptor().capabilities());
-        assertThat(adapter.descriptor().extensions()).isEmpty();
+        assertThat(adapter.descriptor().extensions())
+                .as("Modbus 声明地址算术扩展（多寄存器点位的 base+delta 由协议给出）")
+                .containsExactly(AddressExpansionExtension.class);
+        assertThat(adapter.descriptor().subscriptionAddressing())
+                .as("轮询订阅每轮把全部地址交给 read(...)，整批是原生方式")
+                .isEqualTo(SubscriptionAddressing.BATCH);
     }
 
     @Test

@@ -32,6 +32,7 @@ import cn.ypbin.iot.core.model.SubscribeRequest;
 import cn.ypbin.iot.core.model.SubscriptionHandle;
 import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
+import cn.ypbin.iot.core.protocol.AddressExpansionExtension;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.util.Stages;
 import cn.ypbin.iot.runtime.subscription.PollingSubscriptionManager;
@@ -477,8 +478,22 @@ final class ModbusSession implements DeviceSession {
         return CompletableFuture.completedFuture(PingResult.dead(ModbusAdapter.MSG_CONNECTION_INACTIVE));
     }
 
+    /**
+     * 取协议扩展能力。
+     *
+     * <p>本协议提供 {@link AddressExpansionExtension}：多寄存器点位（int/float=2、double=4、
+     * string=1..32）的兄弟地址必须由协议自己的地址算术给出，框架不做字符串偏移
+     * （偏移错一位会读到另一个寄存器的值，且质量仍是 GOOD）。</p>
+     *
+     * @param extensionType 扩展接口类型
+     * @param <T>           扩展类型
+     * @return 支持时返回实例，否则返回空 Optional
+     */
     @Override
     public <T> Optional<T> unwrap(Class<T> extensionType) {
+        if (extensionType == AddressExpansionExtension.class) {
+            return Optional.of(extensionType.cast(ModbusAddressExpansion.INSTANCE));
+        }
         return Optional.empty();
     }
 
