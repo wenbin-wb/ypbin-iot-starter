@@ -54,6 +54,21 @@ public final class IotMessageKeys {
     /** 出口队列丢弃（有界队列满或已关闭）。 */
     public static final String EGRESS_DROPPED = "iot.common.egress.dropped";
 
+    /** 订阅编排类消息前缀。 */
+    public static final String SUBSCRIPTION_PREFIX = "iot.common.subscription.";
+
+    /**
+     * 需要多寄存器地址展开，但协议未提供地址算术扩展。
+     *
+     * <p><b>绝不静默只订基址</b>：只订基址会让多寄存器解码拿到半截字节，质量却仍是 GOOD——
+     * 「读到了值但值不对」比直接失败更难排查，因此必须显式失败并给出可操作的原因。</p>
+     */
+    public static final String SUBSCRIPTION_ADDRESS_EXPANSION_UNSUPPORTED =
+            SUBSCRIPTION_PREFIX + "address-expansion-unsupported";
+
+    /** 订阅调用失败（协议层未携带更具体的消息键时的兜底原因）。 */
+    public static final String SUBSCRIPTION_FAILED = SUBSCRIPTION_PREFIX + "failed";
+
     /** 建链超时。 */
     public static final String CONNECTION_TIMEOUT = CONNECTION_PREFIX + "timeout";
 
