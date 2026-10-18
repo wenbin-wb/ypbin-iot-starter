@@ -39,6 +39,33 @@
   （imports 登记/默认装配/宿主覆盖/配置绑定/非法配置归一化/描述符来源接线）。变异验证：
   把「只补失败地址」改为「全量重试」后 4 个对应用例转红，已还原。
 
+- **官方协议补齐订阅声明：Modbus 实现地址算术扩展，四个协议显式声明寻址方式（issue #37 缺口修复）**：
+  首版只有声明机制、没有协议实现，导致迁移后**多寄存器点位 100% 失败**（`wordCount>1` 时
+  找不到 `AddressExpansionExtension` 即整点位失败、连基址都不订），且四个官方协议全部落在默认
+  保守侧 `PER_ADDRESS`、订阅调用数按点位数放大。本次补齐：
+  - **Modbus 新增 `ModbusAddressExpansion`**（协议模块包内，无 Spring 注解）实现
+    `AddressExpansionExtension`，`ModbusSession.unwrap` 返回它、`ModbusAdapter` 描述符登记
+    `.extensions(AddressExpansionExtension.class)`。地址语义与宿主原实现一致
+    （`holding:0` → `holding:1`），传统 5 位编号基址（`40001`）归一为规范 `type:offset`
+    再偏移；**越界（offset+delta > 65535）显式抛 `AddressParseException` 而不回绕**
+    ——回绕会把「越界配置」变成「悄悄读到另一个寄存器的值」；`delta<1` 判非法；
+    `offset+delta` 用 `long` 运算，避免 int 溢出成负偏移绕过上界判断。
+  - **Modbus / MQTT / OPC UA 显式声明 `subscriptionAddressing = BATCH`**，TCP 显式声明
+    `PER_ADDRESS`。取舍：**默认值仍取保守侧**（未声明的第三方协议安全），官方协议按各自
+    `subscribe(request)` 的实测语义显式表态。每处声明都配了「一次请求多地址、每个地址都产出
+    数据」的实测用例，不凭协议印象声明：
+    `ModbusSubscriptionOrchestrationTest` MSO-01~04（真实适配器 + 真实 TCP 测试服务器，
+    `wordCount=2` 点位必须读到设备侧两个不同寄存器的值 `1111`/`2222`）、
+    `MqttMultiAddressSubscriptionTest` MPF-06/07（真实嵌入式 broker，一次请求 2 个主题、
+    两个主题都必须有数据）、`OpcUaAdapterTckTest` OPC-06c（一次请求 2 个 NodeId、两个节点
+    都必须被推送）、`TcpSessionBehaviourTest` TCP-10b（声明与 TCP-11 多地址 fail-fast 行为一致）。
+  - **TCP 为何不声明 BATCH**：非 key-value 形态下裸 TCP 帧没有寻址语义、多地址直接 fail-fast
+    （`iot.tcp.subscribe.multi-address-unsupported`）；key-value 形态虽支持多 selector，
+    但那是**配置**决定的形态，而 `subscriptionAddressing` 是**协议级**声明、无法随配置变化，
+    故取两种形态的交集。若将来要为 key-value 放宽，需把寻址方式做成「按设备配置」的能力。
+  变异验证：把 `ModbusAddressExpansion.offset` 改成不做偏移（直接返回基址）后
+  **7 个用例转红**（含端到端 `MSO-02`/`MSO-03` 与 `MAE-02~05`），已还原。
+
 ### 变更
 
 - **母 pom 父链 `ypbin-starter-dependencies` 3.8.0 → 4.0.0（issue #34）**：本仓**代码不依赖**母仓任何模块
