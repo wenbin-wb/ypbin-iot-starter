@@ -23,10 +23,12 @@ import cn.ypbin.iot.core.exception.AddressParseException;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -229,6 +231,51 @@ class CoreValueObjectsTest {
 
         assertThat(PingResult.alive(1L).failureReason()).isNull();
         assertThat(PingResult.dead("iot.test").alive()).isFalse();
+    }
+
+
+    @Test
+    @DisplayName("MODEL-15 订阅寻址声明：默认保守侧为逐点位，且 code/desc/fromCode 完备（禁 ordinal）")
+    void subscriptionAddressingMustBeDeclaredSafely() {
+        // 未声明时的默认值必须是最保守的一侧：
+        // 默认整批的失败模式是「静默只订第 0 个点位」，默认逐点位只损失效率
+        assertThat(SubscriptionAddressing.DEFAULT).isEqualTo(SubscriptionAddressing.PER_ADDRESS);
+        assertThat(SubscriptionAddressing.PER_ADDRESS.getCode())
+                .isNotEqualTo(SubscriptionAddressing.BATCH.getCode());
+        for (SubscriptionAddressing addressing : SubscriptionAddressing.values()) {
+            assertThat(addressing.getDesc()).isNotBlank();
+            assertThat(SubscriptionAddressing.fromCode(addressing.getCode())).contains(addressing);
+        }
+        assertThat(SubscriptionAddressing.fromCode(999)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("MODEL-16 ProtocolDescriptor 未声明订阅寻址时必须归一化为默认值；builder 声明生效")
+    void protocolDescriptorMustNormalizeSubscriptionAddressing() {
+        ProtocolDescriptor undeclared = ProtocolDescriptor.builder()
+                .code(ProtocolCode.of("tcp")).name("TCP").build();
+        assertThat(undeclared.subscriptionAddressing()).isEqualTo(SubscriptionAddressing.DEFAULT);
+
+        ProtocolDescriptor batch = ProtocolDescriptor.builder()
+                .code(ProtocolCode.of("modbus")).name("Modbus")
+                .subscriptionAddressing(SubscriptionAddressing.BATCH).build();
+        assertThat(batch.subscriptionAddressing()).isEqualTo(SubscriptionAddressing.BATCH);
+
+        // builder 显式传 null 等价于不声明（回落默认值，而不是 NPE/空值）
+        ProtocolDescriptor nullDeclared = ProtocolDescriptor.builder()
+                .code(ProtocolCode.of("tcp")).name("TCP").subscriptionAddressing(null).build();
+        assertThat(nullDeclared.subscriptionAddressing()).isEqualTo(SubscriptionAddressing.DEFAULT);
+    }
+
+    @Test
+    @DisplayName("MODEL-17 ProtocolDescriptor 旧构造器（10 参数）保持兼容：新增字段不破坏既有调用点")
+    void protocolDescriptorLegacyConstructorMustStayCompatible() {
+        ProtocolDescriptor legacy = new ProtocolDescriptor(ProtocolCode.of("tcp"), "TCP", "v", "1", "TCP",
+                Set.of(ProtocolCapability.READ), Set.of(), "", "", Map.of());
+        assertThat(legacy.subscriptionAddressing())
+                .as("旧构造器委托给新构造器，语义为「未声明」")
+                .isEqualTo(SubscriptionAddressing.DEFAULT);
+        assertThat(legacy.supports(ProtocolCapability.READ)).isTrue();
     }
 
     @Test
