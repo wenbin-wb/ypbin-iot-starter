@@ -11,6 +11,34 @@
 
 ## [未发布]
 
+### 新增
+
+- **订阅编排下沉到框架 `SubscriptionOrchestrator`（issue #37）**：框架此前只提供 `SubscribeRequest`
+  数据模型与 `DeviceSession#subscribe` 单次调用，**没有任何订阅编排的承接方**——「哪个点位要订、
+  什么时候重订、失败了怎么退避、部分成功怎么补」全留给宿主（下游 `AccessSubscriptionPlanner`
+  为此写了 639 行），而漏一条就是运行期故障：漏掉逐点位分流 ⇒ 裸 TCP 只交付第 0 个点位；
+  漏掉只补失败地址 ⇒ 每轮全量重订、同一点位重复读数；漏掉按会话实例判重订 ⇒ 重连后数据永久停更。
+  现在 `ypbin-iot-spring-boot-starter` 新增 `cn.ypbin.iot.spring.subscription.SubscriptionOrchestrator`
+  与 `SubscriptionOutcome` / `SubscriptionPoint` / `SubscriptionResult` / `SubscriptionStatus` /
+  `SubscriptionBackoffPolicy` / `ProtocolDescriptorSource`，内建六项能力：
+  - **整批 vs 逐点位分流**：判据来自 `ProtocolDescriptor.subscriptionAddressing()` 的**协议声明**
+    （新增 `SubscriptionAddressing` 枚举），不再由宿主按协议码 + `payload-format` 字符串硬编码；
+    未声明时按保守侧 `PER_ADDRESS` 处理（默认整批的失败模式是静默数据缺失，默认逐点位只损失效率）；
+  - **多寄存器地址展开**：点位只声明 `wordCount`，`base+1..base+N-1` 由协议声明的
+    **新增扩展接口 `AddressExpansionExtension`** 计算（框架不猜地址语法，避免偏移错一位）；
+    协议未声明该扩展时该点位**显式失败**而不是只订基址（半截字节 + GOOD 质量比直接失败更难排查）；
+  - **在途去重**：同设备同会话的并发订阅合并为一次真实调用；
+  - **部分成功只补失败地址**：`SubscriptionOutcome.retryAddresses()` 是唯一入口，已成功地址绝不重发；
+  - **按「设备 + 会话实例」指数退避**，配置项 `ypbin.iot.subscription.backoff.{initial-delay,max-delay,multiplier}`；
+    会话实例变了（重连新建会话）即视为新上下文、退避作废并立刻重订——判据用**对象身份**而非
+    `sessionId()` 字符串（协议模块的 sessionId 由「设备+链路」拼成，重连后可能完全相同）；
+  - **`@ConditionalOnMissingBean` 可被宿主整体覆盖**，并接入 `AutoConfiguration.imports`。
+  `ProtocolDescriptor` 新增字段带**旧 10 参数构造器重载**（委托为新构造器的「未声明」语义），
+  既有构造调用点零改动。测试：`SubscriptionOrchestratorTest` ORCH-01~23（分流/展开/只补失败/
+  并发去重/换会话重订/退避上限与重置）、`SubscriptionOrchestratorWiringTest` ORCHW-01~06
+  （imports 登记/默认装配/宿主覆盖/配置绑定/非法配置归一化/描述符来源接线）。变异验证：
+  把「只补失败地址」改为「全量重试」后 4 个对应用例转红，已还原。
+
 ### 变更
 
 - **母 pom 父链 `ypbin-starter-dependencies` 3.8.0 → 4.0.0（issue #34）**：本仓**代码不依赖**母仓任何模块
