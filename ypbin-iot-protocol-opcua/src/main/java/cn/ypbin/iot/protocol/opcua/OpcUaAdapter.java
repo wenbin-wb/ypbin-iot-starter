@@ -30,6 +30,7 @@ import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
 import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.core.util.Stages;
 import cn.ypbin.iot.protocol.opcua.autoconfigure.OpcUaProperties;
 import java.security.cert.X509Certificate;
@@ -149,6 +150,10 @@ public final class OpcUaAdapter implements ProtocolAdapter {
                     ProtocolCapability.SUBSCRIBE_NATIVE, ProtocolCapability.BROWSE,
                     ProtocolCapability.MULTI_DEVICE_LINK)
             .extensions(BrowseExtension.class)
+            // 一次订阅可携带多个 NodeId：OpcUaSession#subscribe 为每个 nodeId 各建一个
+            // monitored item 并各自绑定 listener，服务端逐项返回创建结果
+            // （部分失败按节点可见），因此整批订阅是原生支持的。
+            .subscriptionAddressing(SubscriptionAddressing.BATCH)
             .runtimeVersionRange("0.1.0", "1.0.0")
             .attribute("defaultPort", String.valueOf(DEFAULT_PORT))
             .build();

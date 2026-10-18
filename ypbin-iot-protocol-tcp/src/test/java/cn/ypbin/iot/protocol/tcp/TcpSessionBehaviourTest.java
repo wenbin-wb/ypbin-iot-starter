@@ -40,6 +40,7 @@ import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.protocol.tcp.autoconfigure.TcpProperties;
 import cn.ypbin.iot.runtime.context.DefaultAdapterContext;
 import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
@@ -345,6 +346,17 @@ class TcpSessionBehaviourTest {
         } finally {
             session.close().toCompletableFuture().join();
         }
+    }
+
+    @Test
+    @DisplayName("TCP-10b issue #37：描述符必须显式声明 PER_ADDRESS（与 TCP-11 的 fail-fast 行为一致）")
+    void descriptorMustDeclarePerAddress() {
+        // 声明要与真实行为一致：TCP-11 证明非 key-value 形态下多地址会 fail-fast，
+        // 因此不能声明 BATCH（否则编排器会一次发多地址，全部失败）。
+        // key-value 形态虽支持多 selector，但那是**配置**决定的形态、协议级声明无法随配置变化，
+        // 故声明取两种形态的交集。
+        assertThat(adapter.descriptor().subscriptionAddressing())
+                .isEqualTo(SubscriptionAddressing.PER_ADDRESS);
     }
 
     @Test
