@@ -21,6 +21,64 @@
     的双基线。
   - **无 API 变更**：本仓源码一行未改，`mvn clean verify` 468 用例全绿、`tools/preflight.sh` 8/8 全过。
 
+- **对外 BOM 固化 + 显式属性（issue #36）**：`ypbin-iot-bom` 原先用 `${revision}` 声明 8 个 IoT 模块版本，
+  宿主 `import` 本 BOM 时 Maven 会用**导入方上下文**展开它；而父链 `ypbin-starter` 恰好把
+  `ypbin-starter-*` 的版本写成 `${revision}`，于是宿主的 starter 版本被顶成 IoT 的版本号
+  （实测：期望 `ypbin-starter-core` 4.0.0，实际 **0.4.0**）——编译能过、运行期行为漂移，且完全静默。
+  - 修法两条（都实测必需）：① BOM 自身的依赖版本改用显式属性（`${iot-starter.version}` /
+    显式 `import cn.ypbin:ypbin-starter-bom:${ypbin.starter.version}`）；② BOM 用
+    `flatten-maven-plugin` 的 `flattenMode=bom` **固化**后安装——安装出去的 pom 不带 `<parent>`，
+    继承来的 `${revision}` 条目整体消失，本地属性被解析成字面量。
+  - **宿主无需改任何 POM**：只需 `import cn.ypbin:ypbin-iot-bom`，「只引 iot-bom、不引 starter-bom」
+    也能解析到正确的 `ypbin-starter-*` 4.0.0（已用 `help:effective-pom` 逐项留证）。
+  - 新增发布门禁 `tools/check-bom-no-revision.sh`（接入 `tools/preflight.sh` 第 1 步）：
+    断言已安装的 `ypbin-iot-bom-*.pom` 中 `${revision}` 出现次数为 0，否则发布前直接失败。
+
+- **设备 revision 由框架分配（issue #38 其一）**：新增 `iot-core` 的 `DeviceRevisionAllocator`
+  （按设备 `AtomicLong` 原子递增；`dispatch(type, device)` 构造 `DeviceChange`；
+  `dispatch(type, device, hostRevision)` 取 `max(分配值, hostRevision)` 兼容宿主既有自增）。
+  宿主不再需要自己维护「按设备严格递增的 revision」——漏递增此前会让该设备的变更被**永久丢弃**且无日志。
+  starter 自动注册 `@Bean @ConditionalOnMissingBean DeviceRevisionAllocator`，宿主可替换。
+  测试：`DeviceRevisionAllocatorTest`（REV-01~07，含 8 线程 × 200 次并发不重号）。
+
+- **设备级 bind 退避重试（issue #38 其二）**：链路级 `ConnectionReconnector` 只覆盖「已绑定链路断开」，
+  「bind 本身失败」此前只记一行 WARN 就放弃 ⇒ 设备在配置变更后**永久离线**（宿主只能自己补一套重试）。
+  现在 `IotLifecycle` 区分**瞬时失败**（建链失败/探测不可达/acquire-bind 超时 ⇒ 退避重试）与
+  **永久失败**（无适配器/校验不通过/链路规格缺失/生命周期已关闭 ⇒ 立即放弃并如实记录），
+  重试按设备独立退避、逐轮上限、耗尽即停。
+  - 新配置（全部在 `ypbin.iot.devices.*`，均可热改）：`rebind-backoff-initial`（默认 `30s`）、
+    `rebind-backoff-max`（默认 `2min`）、`rebind-max-per-cycle`（默认 `20`）、
+    `rebind-max-attempts`（默认 `5`）。
+  - 耗尽时**记 WARN 带完整堆栈**并通过 `DeviceEventListener` 通知宿主（`CONNECT_FAILED` 事件，
+    cause 为解包后的真实原因）——框架不落库，宿主只能靠该事件更新设备状态/告警。
+  - 启动 bootstrap、`onDeviceChange`、显式 `bind()`、链路 `reconnect()` 四条路径统一接入；
+    `unbind`/REMOVE/`close()` 会取消待重试（避免把已解绑设备重新绑回来）。
+  - 测试：`LifecycleBindRetryTest`（BRT-01~08，含「每轮不超上限」「耗尽 WARN 带堆栈 + 事件通知」
+    「unbind 取消重试」「永久失败不重试」）。
+
+- **过期 revision 丢弃日志不再是 debug（issue #38 其三）**：`onDeviceChange` 丢弃
+  `revision <= 已应用值` 的变更时，日志级别由 `ypbin.iot.devices.stale-revision-log-level`
+  控制（默认 **INFO**；可选 DEBUG/INFO/WARN/ERROR）。日志内容包含设备、收到的 revision、
+  已应用 revision，并直接给出修复方向（改用 `DeviceRevisionAllocator`）。原因：这条日志对应
+  「设备永久零数据」的根因，固定在 debug 等于生产上不存在。
+
+- **指数退避上收为纯函数（issue #39 c）**：新增 `iot-core` 的 `ExponentialBackoff`
+  （`nextDelay(attempt, initial, max)` / `nextDelayMillis`）。业务仓此前在两处手写
+  `base × 2^(attempts-1)`，边界已经分叉（`attempts - 1` vs `Math.max(attempts,1) - 1`、
+  一处封顶一处不封顶）。现在起点（`attempt=0/1` 均为 initial）、翻倍、封顶、指数上界（2^20 防溢出）、
+  `initial > max`、非法参数 fail-fast 全部由框架钉死。测试：`ExponentialBackoffTest`（BO-01~06）。
+
+### 移交业务仓（`ypbin-iot`，本仓不改）
+
+以下三项经核实属于业务仓职责（本仓无对应代码），按 issue #39 约定**只做移交登记**：
+
+- **a) `MqttBinaryNumberDecoder`**：业务仓的 MQTT 二进制数值解码器应改为复用本仓
+  `BytePayloadDecoder` SPI（`0.4.0` 已提供），不必自建一套解码 + 注册机。
+- **b) 业务仓重复 `@Bean` 声明**：业务仓重复注册了本仓已自动装配的 Bean，应删除宿主侧声明，
+  改用本仓的 `@ConditionalOnMissingBean` 默认实现（需要定制时再覆盖）。
+- **d) 业务仓指标埋点**：错误码/指标的 `recordError` 调用点应在业务仓统一到本仓 `IotMessageKeys`
+  口径，避免同一失败在两处被记成不同错误码。
+
 ## [0.4.0] - 2026-10-17
 
 ### 新增
