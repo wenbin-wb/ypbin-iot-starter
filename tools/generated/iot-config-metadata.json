@@ -8,7 +8,7 @@
     "ypbin-iot-protocol-tcp",
     "ypbin-iot-spring-boot-starter"
   ],
-  "propertyCount": 53,
+  "propertyCount": 56,
   "properties": [
     {
       "name": "ypbin.iot.connection.connect-rate-jitter",
@@ -432,6 +432,30 @@
       "description": "Netty worker 线程数",
       "defaultValue": null,
       "sourceType": "cn.ypbin.iot.spring.autoconfigure.IotProperties$SchedulerProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.subscription.backoff.initial-delay",
+      "type": "java.time.Duration",
+      "description": "首次失败后的退避时长（默认 30s）",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.SubscriptionProperties$BackoffProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.subscription.backoff.max-delay",
+      "type": "java.time.Duration",
+      "description": "退避上限（默认 2min）",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.SubscriptionProperties$BackoffProperties",
+      "module": "ypbin-iot-spring-boot-starter"
+    },
+    {
+      "name": "ypbin.iot.subscription.backoff.multiplier",
+      "type": "java.lang.Double",
+      "description": "每次失败后的放大倍率（默认 2.0；&lt; 1 会被归一化为默认值）",
+      "defaultValue": null,
+      "sourceType": "cn.ypbin.iot.spring.autoconfigure.SubscriptionProperties$BackoffProperties",
       "module": "ypbin-iot-spring-boot-starter"
     }
   ]
