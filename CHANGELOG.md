@@ -9,7 +9,48 @@
 **`0.4.0`（2026-10-17）**，均已发布到 Maven Central；其中 `0.1.0` 由 `ypbin-access`
 作为首个真实宿主接入验证。
 
-## [未发布]
+## [0.5.0] - 2026-10-19
+
+> 次版本升级（`0.4.0` → `0.5.0`），全部向后兼容，无破坏性变更。
+> 对应代码审查（2026-10-18）4 个 issue（#36/#37/#38/#39）+ #37 技术债反哺。
+
+### 依赖
+
+- **父链与 BOM 同步升级到 `ypbin-starter 4.1.0`**（`ypbin-iot-bom` 的 `ypbin.starter.version` 一并更新）。
+  宿主只 import 本 BOM 即可拿到 starter 4.1.0 的新能力（跨服务日志上报 SPI、`AbstractPermissionProvider`、
+  `DataScopeCalculator` 等），不再需要自己声明 starter BOM 顺序。
+
+### 新增
+
+- **`SubscriptionOrchestrator` 订阅编排下沉（#37）**：整批/逐点位分流（判据来自协议声明，不再靠宿主硬编码
+  `payload-format`）、多寄存器地址展开（`AddressExpansionExtension`，Modbus 已实现 `ModbusAddressExpansion`）、
+  在途去重、**部分成功只补失败地址**、按「设备 + 会话实例」指数退避（`ypbin.iot.subscription.backoff.*`）、
+  `@ConditionalOnMissingBean` 可覆盖。
+  - ⚠️ **会话实例用对象身份判等而非 `sessionId()` 字符串**：协议模块 sessionId 由「设备+链路」拼成，
+    重连后可能相同，用字符串会把新会话误认成老会话 ⇒ 数据永久停更。
+  - 未声明寻址方式的第三方协议兜底 **PER_ADDRESS**（保守侧，避免「只交付第 0 个地址」的静默数据缺失）。
+- **订阅寻址支持「协议级默认 + 按形态细分」（#37 技术债反哺）**：新增 `SubscriptionAddressingPolicy`
+  （默认值 + variant 覆盖表 + 形态解析器），`ProtocolDescriptor#resolveAddressing(DeviceSpec)` 是编排器唯一入口。
+  TCP 现声明 `key-value ⇒ BATCH`、其余 `PER_ADDRESS`；**未命中形态兜底 PER_ADDRESS 并 WARN 一次**（不回落协议级默认值）。
+  宿主因此可删除自建退避表与分流逻辑（业务仓实测 495 → 384 行、`grep session.subscribe` 归零）。
+- **`DeviceRevisionAllocator`（#38）**：设备 revision 由框架分配（兼容宿主传入更大值取 max，不回退）。
+- **`ExponentialBackoff`（#39）**：指数退避纯函数上收，供宿主复用。
+
+### 修复
+
+- **`ypbin-iot-bom` 固化（#36）**：`flattenMode=bom` + 显式版本属性，修复宿主 import 本 BOM 时
+  `ypbin-starter-*` 版本被顶成 iot revision 的缺陷。**根因不是「8 处 `${revision}`」**（只换显式属性无效）：
+  Maven 用**导入方上下文**展开 BOM 里**继承来**的 `${revision}`，必须叠加 flatten 固化（安装出的 pom 不带 `<parent>`）。
+  实测：修复前宿主解析 `ypbin-starter-core = 0.4.0`，修复后 `= 4.1.0`。新增 `tools/check-bom-no-revision.sh` 门禁。
+- **设备级 bind 退避重试（#38）**：`IotLifecycle` 内建重试 + `ypbin.iot.devices.rebind-backoff-*` 配置，
+  重试耗尽 WARN 带完整堆栈并通过 `DeviceEventListener` 通知宿主；stale revision 日志级别可配（默认 INFO，不再只有 debug）。
+
+### 升级注意
+
+- `SubscriptionAddressing` 默认保守侧：未声明寻址方式的协议走逐点位（功能正确、调用数变多）。
+- `AddressExpansionExtension` 目前只有 Modbus 实现；其他协议声明 `wordCount > 1` 会**显式失败**（不静默只订基址）。
+- 4 个官方协议已显式声明：Modbus/MQTT/OPC UA = `BATCH`，TCP = `PER_ADDRESS`（key-value 形态按细分表走 `BATCH`）。
+
 
 ### 新增
 
