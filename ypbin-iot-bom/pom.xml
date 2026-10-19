@@ -41,7 +41,7 @@
         <!-- IoT 模块版本：${project.version} 由 flatten 解析成字面量，随根 pom 的 <revision> 走 -->
         <iot-starter.version>${project.version}</iot-starter.version>
         <!-- 母仓 starter 版本：必须等于根 pom 的 <parent><version>（升级父链时同步改这里） -->
-        <ypbin.starter.version>4.1.0</ypbin.starter.version>
+        <ypbin.starter.version>4.2.0</ypbin.starter.version>
     </properties>
 
     <dependencyManagement>
