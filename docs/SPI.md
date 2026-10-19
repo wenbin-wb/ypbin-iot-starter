@@ -1411,15 +1411,82 @@ public record ProtocolDescriptor(
         Set<Class<? extends ProtocolExtension>> extensions,   // 显式声明的扩展接口（见 §6.1）
         String minimumRuntimeVersion,    // 要求的最低 iot-runtime 版本（含）
         String maximumRuntimeVersion,    // 支持的最高 iot-runtime 版本（不含）
-        Map<String, String> attributes) {  // 协议元信息（默认端口、规范编号等）
+        Map<String, String> attributes,  // 协议元信息（默认端口、规范编号等）
+        SubscriptionAddressing subscriptionAddressing,          // 协议级默认寻址方式
+        SubscriptionAddressingPolicy addressingPolicy,          // 协议级默认 + 按形态细分
+        SubscriptionAddressingPolicy.VariantResolver variantResolver) {  // 形态解析器（可空）
 
     public static Builder builder();
     public boolean supports(ProtocolCapability capability);
 
     /** 是否声明支持某个扩展接口。 */
     public boolean supportsExtension(Class<? extends ProtocolExtension> extensionType);
+
+    /** 解析当前设备的订阅寻址方式（编排器唯一应调用的入口）。 */
+    public SubscriptionAddressingPolicy.Resolution resolveAddressing(DeviceSpec device);
 }
 ```
+
+#### 5.1.1 订阅寻址：协议级默认 + 按形态（variant）细分
+
+**问题**：同一个协议在**不同配置形态**下多地址能力可能完全不同。最典型的是 TCP 透传：
+`payload-format=binary/text/number` 时帧是不透明字节流、**没有寻址语义**（多地址直接 fail-fast），
+而 `payload-format=key-value` 时订阅地址是帧内字段 selector、**一帧可服务多个点位**。
+
+**上一版（0.4.x）的局限**：`subscriptionAddressing` 只能有一个值，TCP 只能取交集
+`PER_ADDRESS`，于是 key-value 形态被迫把 N 个点位拆成 N 次订阅。宿主为拿回性能
+**在业务仓自建退避表、绕开框架编排器**——通用能力被焊在业务仓（违反全局规范 1.6）。
+
+**现在（0.5.0）**：描述符可声明「variant 键 → 寻址方式」的映射，并给出形态解析器：
+
+```java
+ProtocolDescriptor.builder()
+        .code(TCP)
+        .name("TCP 透传")
+        // 协议级默认：保守侧（未取到形态 / 形态未声明时使用）
+        .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
+        // 按 payload-format 细分：只有 key-value 支持一次多地址
+        .subscriptionAddressingByVariant(Map.of(
+                "binary", SubscriptionAddressing.PER_ADDRESS,
+                "text", SubscriptionAddressing.PER_ADDRESS,
+                "number", SubscriptionAddressing.PER_ADDRESS,
+                "key-value", SubscriptionAddressing.BATCH))
+        // 形态判据只有协议自己知道：lambda 捕获适配器实例的配置
+        .variantResolver(device -> capturedPayloadFormat.variant())
+        .build();
+```
+
+**解析规则（`ProtocolDescriptor#resolveAddressing`，编排器不重复实现）**：
+
+| 情形 | 结果 | `variantMiss` |
+|---|---|---|
+| 未声明细分表 | 协议级 `subscriptionAddressing` | `false` |
+| 声明细分 + 未给解析器 / 解析不出形态（`null`） | 协议级 `subscriptionAddressing` | `false` |
+| 声明细分 + 形态命中表中键 | 表中该值 | `false` |
+| 声明细分 + 形态**未**命中 | **兜底 `PER_ADDRESS`** | `true`（编排器 WARN 一次） |
+| 形态解析器抛异常 | 协议级 `subscriptionAddressing` | `false`（不让订阅整轮失败） |
+
+**为什么未命中兜底保守侧而不是回落协议级默认值**：协议级默认值可能就是 `BATCH`，
+把「未知形态」当成「支持多地址」的失败模式是**静默数据缺失**（只交付第 0 个地址），
+而兜底逐点位只是效率损失。两者不对称，所以未命中必须取保守侧。
+
+**variant 键由协议定义**：框架**不认识** `key-value` 这类字符串，只做「取键 → 查表 → 兜底」。
+这正是为了避免上一版宿主「按协议码 + `payload-format` 硬编码分流」的老问题换个地方复发。
+
+**向后兼容**：
+- 旧 10 参构造器（无寻址声明）与上一版 11 参构造器（只有单选值）**继续可用**，
+  分别映射为「未声明」与「策略 = 该单选值、无细分」；
+- builder 不调用 `subscriptionAddressingByVariant(...)` 时行为与 0.4.x **逐字一致**；
+- 未声明的第三方协议仍按保守侧 `PER_ADDRESS`。
+
+**当前官方协议的声明**：
+
+| 协议 | 协议级默认 | 细分 |
+|---|---|---|
+| Modbus | `BATCH` | 无（轮询订阅每轮把全部地址交给 `read(...)`） |
+| MQTT | `BATCH` | 无（一次订阅多个主题） |
+| OPC UA | `BATCH` | 无（每个 nodeId 一个 monitored item） |
+| TCP 透传 | `PER_ADDRESS` | `key-value ⇒ BATCH`，其余 ⇒ `PER_ADDRESS` |
 
 **三个新增字段的用途（缺一不可）**：
 
