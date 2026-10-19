@@ -38,8 +38,10 @@ import cn.ypbin.iot.core.model.SubscriptionHandle;
 import cn.ypbin.iot.core.model.TlsOptions;
 import cn.ypbin.iot.core.model.WriteRequest;
 import cn.ypbin.iot.core.model.WriteResult;
+import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolCapability;
 import cn.ypbin.iot.core.protocol.ProtocolCode;
+import cn.ypbin.iot.core.protocol.ProtocolConnection;
 import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
 import cn.ypbin.iot.protocol.tcp.autoconfigure.TcpProperties;
 import cn.ypbin.iot.runtime.context.DefaultAdapterContext;
@@ -47,6 +49,14 @@ import cn.ypbin.iot.runtime.context.DefaultAdapterSettings;
 import cn.ypbin.iot.runtime.context.EnvCredentialResolver;
 import cn.ypbin.iot.runtime.context.NoopMetricsRecorder;
 import cn.ypbin.iot.runtime.scheduler.DefaultTaskScheduler;
+import cn.ypbin.iot.spring.subscription.DefaultSubscriptionOrchestrator;
+import cn.ypbin.iot.spring.subscription.ProtocolDescriptorSource;
+import cn.ypbin.iot.spring.subscription.SubscriptionBackoffPolicy;
+import cn.ypbin.iot.spring.subscription.SubscriptionBatchItem;
+import cn.ypbin.iot.spring.subscription.SubscriptionOrchestrator;
+import cn.ypbin.iot.spring.subscription.SubscriptionPoint;
+import cn.ypbin.iot.spring.subscription.SubscriptionResult;
+import cn.ypbin.iot.spring.subscription.SubscriptionStatus;
 import cn.ypbin.iot.transport.FramingMode;
 import cn.ypbin.iot.transport.FramingSpec;
 import cn.ypbin.iot.transport.NettyChannelConnection;
@@ -349,14 +359,81 @@ class TcpSessionBehaviourTest {
     }
 
     @Test
-    @DisplayName("TCP-10b issue #37：描述符必须显式声明 PER_ADDRESS（与 TCP-11 的 fail-fast 行为一致）")
-    void descriptorMustDeclarePerAddress() {
-        // 声明要与真实行为一致：TCP-11 证明非 key-value 形态下多地址会 fail-fast，
-        // 因此不能声明 BATCH（否则编排器会一次发多地址，全部失败）。
-        // key-value 形态虽支持多 selector，但那是**配置**决定的形态、协议级声明无法随配置变化，
-        // 故声明取两种形态的交集。
+    @DisplayName("TCP-10b issue #37：描述符按 payload-format 细分声明寻址方式（binary ⇒ 逐点位）")
+    void descriptorMustDeclarePerAddressForBinary() {
+        // 协议级默认取保守侧；binary/text/number 形态下裸 TCP 帧无寻址语义、多地址 fail-fast
         assertThat(adapter.descriptor().subscriptionAddressing())
+                .as("协议级默认必须是保守侧").isEqualTo(SubscriptionAddressing.PER_ADDRESS);
+        assertThat(adapter.descriptor().addressingPolicy().hasVariants())
+                .as("TCP 的多地址能力随 payload-format 变化，必须声明形态细分").isTrue();
+        assertThat(adapter.descriptor().addressingPolicy().declaredFor("binary"))
+                .contains(SubscriptionAddressing.PER_ADDRESS);
+        assertThat(adapter.descriptor().resolveAddressing(defaultDevice())
+                .addressing())
+                .as("binary 实例（默认）必须解析为逐点位")
                 .isEqualTo(SubscriptionAddressing.PER_ADDRESS);
+    }
+
+    @Test
+    @DisplayName("TCP-10c issue #37：key-value 实例的描述符必须解析出 BATCH（同一协议不同形态）")
+    void keyValueAdapterMustResolveBatch() {
+        TcpAdapter keyValueAdapter = new TcpAdapter(transport, FramingSpec.none(), Duration.ZERO,
+                TcpPayloadFormat.KEY_VALUE);
+        formatAdapters.add(keyValueAdapter);
+
+        assertThat(keyValueAdapter.descriptor().addressingPolicy().declaredFor("key-value"))
+                .as("key-value 形态必须在声明表里登记为 BATCH")
+                .contains(SubscriptionAddressing.BATCH);
+        assertThat(keyValueAdapter.descriptor().resolveAddressing(defaultDevice()).addressing())
+                .as("key-value 实例必须解析出整批 —— 这是宿主可以删除自建退避表的前提")
+                .isEqualTo(SubscriptionAddressing.BATCH);
+    }
+
+    @Test
+    @DisplayName("TCP-10d issue #37：key-value 形态下编排器必须一次请求订多个 selector 且全部收到数据")
+    void keyValueOrchestratorMustSubscribeAllSelectorsInOneCall() throws Exception {
+        // 端到端证据：真实 TcpAdapter(key-value) + 真实回显服务 + 真实编排器。
+        // 证明「一次订阅 N 个 selector，全部收到数据」，而不是靠协议印象声明 BATCH。
+        TcpAdapter keyValueAdapter = new TcpAdapter(transport, FramingSpec.none(), Duration.ZERO,
+                TcpPayloadFormat.KEY_VALUE);
+        formatAdapters.add(keyValueAdapter);
+        ProtocolConnection connection = keyValueAdapter.open(connectionSpec(), context)
+                .toCompletableFuture().orTimeout(5, TimeUnit.SECONDS).join();
+        DeviceSpec device = defaultDevice();
+        DeviceSession session = keyValueAdapter.bind(connection, device, context)
+                .toCompletableFuture().orTimeout(5, TimeUnit.SECONDS).join();
+        try {
+            List<PointValue> received = new CopyOnWriteArrayList<>();
+            SubscriptionOrchestrator orchestrator = new DefaultSubscriptionOrchestrator(
+                    ProtocolDescriptorSource.of(List.of(keyValueAdapter.descriptor())),
+                    SubscriptionBackoffPolicy.defaults(), Clock.systemUTC());
+
+            SubscriptionResult result = orchestrator.subscribe(new SubscriptionBatchItem(
+                            device, session,
+                            List.of(SubscriptionPoint.of("TEMP"), SubscriptionPoint.of("HUMI"),
+                                    SubscriptionPoint.of("BAT")),
+                            received::add))
+                    .toCompletableFuture().orTimeout(10, TimeUnit.SECONDS).join();
+
+            assertThat(result.status()).isEqualTo(SubscriptionStatus.SUBSCRIBED);
+            assertThat(result.outcome().subscribed()).extracting(PointAddress::raw)
+                    .containsExactlyInAnyOrder("TEMP", "HUMI", "BAT");
+
+            // 一帧携带三个字段：三个 selector 都必须各自收到值
+            session.write(WriteRequest.of(new PointWrite(PointAddress.of("out"),
+                            "TEMP=23.5,HUMI=55,BAT=90")))
+                    .toCompletableFuture().orTimeout(5, TimeUnit.SECONDS).join();
+            awaitUntil(() -> received.size() >= 3, Duration.ofSeconds(5));
+
+            assertThat(received).extracting(value -> value.address().raw())
+                    .as("key-value 形态下 N 个 selector 必须全部收到数据（一次订阅、N 个点位）")
+                    .containsExactlyInAnyOrder("TEMP", "HUMI", "BAT");
+            assertThat(received).allSatisfy(value ->
+                    assertThat(value.quality()).isEqualTo(Quality.GOOD));
+        } finally {
+            session.close().toCompletableFuture().join();
+            connection.close();
+        }
     }
 
     @Test
@@ -471,6 +548,15 @@ class TcpSessionBehaviourTest {
                 Duration.ZERO, Map.of());
         return (TcpSession) effective.bind(connection, device, context)
                 .toCompletableFuture().orTimeout(3, TimeUnit.SECONDS).join();
+    }
+
+    /**
+     * 默认设备规格（构造描述符形态解析所需的设备视图）。
+     *
+     * @return 设备规格
+     */
+    private static DeviceSpec defaultDevice() {
+        return new DeviceSpec("tcp-device", "TCP 设备", CODE, "tcp-conn", "", Duration.ZERO, Map.of());
     }
 
     private ConnectionSpec connectionSpec() {

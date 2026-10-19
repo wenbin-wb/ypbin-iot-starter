@@ -39,6 +39,34 @@
   （imports 登记/默认装配/宿主覆盖/配置绑定/非法配置归一化/描述符来源接线）。变异验证：
   把「只补失败地址」改为「全量重试」后 4 个对应用例转红，已还原。
 
+- **订阅寻址升级为「协议级默认 + 按形态细分」：TCP key-value 也能整批订阅（issue #37 技术债反哺）**：
+  上一版把订阅寻址做成**协议级单一值**，于是 TCP 只能声明 `PER_ADDRESS`——但 key-value 形态
+  （`payload-format=key-value`）下订阅地址是帧内字段 selector、一帧可服务多个点位，本可整批。
+  被迫取交集的后果是：宿主为拿回性能**在业务仓自建退避表、绕开框架编排器**，通用能力被焊在业务仓
+  （全局规范 1.6）。本次把表达能力补齐：
+  - 新增 `SubscriptionAddressingPolicy`：协议级默认值 + `variant 键 → 寻址方式` 映射 +
+    `VariantResolver`（形态解析器）。`ProtocolDescriptor` 新增 `addressingPolicy` /
+    `variantResolver` 两个组件，并提供唯一解析入口 `resolveAddressing(DeviceSpec)`
+    ——编排器只调这一个方法，**不认识任何形态字符串**（避免「宿主硬编码 `payload-format`」
+    的问题换个地方复发）。
+  - **未命中语义**：协议声明了细分表但当前形态不在表内 ⇒ **兜底 `PER_ADDRESS` 并 WARN 一次**
+    （按协议 + 设备去重，不刷屏）。刻意<b>不回落协议级默认值</b>——那可能就是 `BATCH`，
+    把「未知形态」当「支持多地址」的失败模式是静默数据缺失。
+  - **TCP 适配器**按新机制声明：`key-value ⇒ BATCH`，`binary/text/number ⇒ PER_ADDRESS`；
+    形态键取自 `TcpPayloadFormat#variant()`（协议自己定义），适配器实例的描述符由
+    实例的 `payload-format` 构造。**宿主不再需要为 key-value 自建退避表。**
+  - **向后兼容**：旧 10 参构造器、上一版 11 参构造器继续可用（分别映射为「未声明」与
+    「策略 = 该单选值、无细分」）；builder 不声明细分时行为与 0.4.x 逐字一致；
+    未声明的第三方协议仍按保守侧 `PER_ADDRESS`。回归证据：
+    `SubscriptionAddressingPolicyTest` SAP-06/07、`SubscriptionOrchestratorTest` ORCH-V1。
+  - 测试：`SubscriptionAddressingPolicyTest` SAP-01~12（未声明/命中/未命中/取不到形态/
+    旧构造器兼容/解析器抛异常/防御性拷贝）、`SubscriptionOrchestratorTest` ORCH-V1~V6
+    （a 未声明回归、b 同协议两形态分流、c 未命中兜底 + WARN 断言、d WARN 去重、
+    e 核心不变量回归：只补失败地址 / 在途去重）、`TcpSessionBehaviourTest` TCP-10b/10c/10d
+    （真实适配器 + 真实回显服务 + 真实编排器：key-value 一次订阅 3 个 selector、全部收到数据）。
+  变异验证：把「未命中兜底 PER_ADDRESS」改成「兜底 BATCH」后 2 个用例转红
+  （`undeclaredVariantMustFallBackToConservativeSide`、`descriptorMustResolveVariantFromResolver`），已还原。
+
 - **官方协议补齐订阅声明：Modbus 实现地址算术扩展，四个协议显式声明寻址方式（issue #37 缺口修复）**：
   首版只有声明机制、没有协议实现，导致迁移后**多寄存器点位 100% 失败**（`wordCount>1` 时
   找不到 `AddressExpansionExtension` 即整点位失败、连基址都不订），且四个官方协议全部落在默认
@@ -59,10 +87,9 @@
     `MqttMultiAddressSubscriptionTest` MPF-06/07（真实嵌入式 broker，一次请求 2 个主题、
     两个主题都必须有数据）、`OpcUaAdapterTckTest` OPC-06c（一次请求 2 个 NodeId、两个节点
     都必须被推送）、`TcpSessionBehaviourTest` TCP-10b（声明与 TCP-11 多地址 fail-fast 行为一致）。
-  - **TCP 为何不声明 BATCH**：非 key-value 形态下裸 TCP 帧没有寻址语义、多地址直接 fail-fast
-    （`iot.tcp.subscribe.multi-address-unsupported`）；key-value 形态虽支持多 selector，
-    但那是**配置**决定的形态，而 `subscriptionAddressing` 是**协议级**声明、无法随配置变化，
-    故取两种形态的交集。若将来要为 key-value 放宽，需把寻址方式做成「按设备配置」的能力。
+  - **TCP 的形态差异已由「按 variant 细分」表达**（见上一条）：`key-value ⇒ BATCH`、
+    其余 ⇒ `PER_ADDRESS`。此前「key-value 只能由宿主自己分流」的限制**已解除**，
+    宿主可删除自建的 key-value 退避表/绕行逻辑。
   变异验证：把 `ModbusAddressExpansion.offset` 改成不做偏移（直接返回基址）后
   **7 个用例转红**（含端到端 `MSO-02`/`MSO-03` 与 `MAE-02~05`），已还原。
 
