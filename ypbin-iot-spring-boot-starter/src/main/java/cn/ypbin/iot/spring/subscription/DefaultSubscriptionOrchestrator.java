@@ -24,6 +24,7 @@ import cn.ypbin.iot.core.protocol.AddressExpansionExtension;
 import cn.ypbin.iot.core.protocol.DeviceSession;
 import cn.ypbin.iot.core.protocol.ProtocolDescriptor;
 import cn.ypbin.iot.core.protocol.SubscriptionAddressing;
+import cn.ypbin.iot.core.protocol.SubscriptionAddressingPolicy;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -85,6 +86,9 @@ public final class DefaultSubscriptionOrchestrator implements SubscriptionOrches
 
     /** 未注册协议只 WARN 一次，避免每轮每设备刷屏。 */
     private final Set<String> warnedProtocols = ConcurrentHashMap.newKeySet();
+
+    /** 声明了形态细分但形态未命中的设备同样只 WARN 一次（按协议 + 设备去重）。 */
+    private final Set<String> warnedUnmappedVariants = ConcurrentHashMap.newKeySet();
 
     /** 累计发起的协议层订阅调用次数（观测入口，供宿主与测试核对「只发一次」语义）。 */
     private final AtomicLong dispatchedCalls = new AtomicLong();
@@ -290,8 +294,18 @@ public final class DefaultSubscriptionOrchestrator implements SubscriptionOrches
     /**
      * 判定该设备走整批还是逐点位单订阅。
      *
-     * <p>未注册协议按 {@link SubscriptionAddressing#DEFAULT} 处理并 WARN 一次：
-     * 「默认整批」的失败模式是静默数据缺失，「默认逐点位」只是效率损失，两者不对称。</p>
+     * <p><b>判据完全来自协议声明</b>：编排器只做「取解析结果 → 是否未命中 → 兜底」，
+     * 不认识任何形态字符串（如 {@code payload-format}）——那正是宿主时代硬编码的来源。
+     * 形态解析由协议自己的 {@link SubscriptionAddressingPolicy.VariantResolver}
+     * 完成，细化表由 {@code ProtocolDescriptor#subscriptionAddressingByVariant(...)} 声明。</p>
+     *
+     * <p>两类异常状态都要 WARN 且都兜底保守侧（绝不静默、绝不乐观默认整批）：</p>
+     * <ul>
+     *   <li>协议未注册描述符：无法知道任何声明；</li>
+     *   <li>协议声明了细化表、但当前形态未在表内：说明配置或声明漏了一格。</li>
+     * </ul>
+     * <p>WARN 按「协议」与「协议 + 形态」分别去重，避免每轮每设备刷屏，但不会把
+     * 「另一个形态未声明」也一起吞掉。</p>
      */
     private SubscriptionAddressing addressing(DeviceSpec device) {
         Optional<ProtocolDescriptor> descriptor = descriptors.find(device);
@@ -304,7 +318,19 @@ public final class DefaultSubscriptionOrchestrator implements SubscriptionOrches
             }
             return SubscriptionAddressing.DEFAULT;
         }
-        return descriptor.get().subscriptionAddressing();
+        SubscriptionAddressingPolicy.Resolution resolution =
+                descriptor.get().resolveAddressing(device);
+        if (resolution.variantMiss()) {
+            // 声明了细化表但当前形态未声明：兜底保守侧，且必须可见
+            if (warnedUnmappedVariants.add(device.protocol().value() + "|" + device.deviceId())) {
+                log.warn("[ypbin-iot] protocol {} declares subscription-addressing variants but the current "
+                                + "device {} hit no declared variant; falling back to {} (one address per request). "
+                                + "Declare the variant in ProtocolDescriptor.subscriptionAddressingByVariant(...) "
+                                + "or fix the shape resolution — do not let an undeclared shape silently use batch.",
+                        device.protocol().value(), device.deviceId(), resolution.addressing());
+            }
+        }
+        return resolution.addressing();
     }
 
     // ------------------------------------------------------------------

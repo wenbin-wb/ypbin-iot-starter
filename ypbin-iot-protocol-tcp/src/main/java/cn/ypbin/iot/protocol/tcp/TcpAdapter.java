@@ -32,10 +32,13 @@ import cn.ypbin.iot.transport.FramingSpec;
 import cn.ypbin.iot.transport.NettyChannelConnection;
 import cn.ypbin.iot.transport.NettyTransport;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,27 +89,6 @@ public final class TcpAdapter implements ProtocolAdapter {
     /** 帧内 selector 对应字段值为空的消息键。 */
     public static final String MSG_SELECTOR_VALUE_EMPTY = "iot.tcp.selector.value-empty";
 
-    private static final ProtocolDescriptor DESCRIPTOR = ProtocolDescriptor.builder()
-            .code(PROTOCOL_CODE)
-            .name("TCP 透传")
-            .vendor("Netty")
-            .transport("TCP")
-            .capabilities(ProtocolCapability.WRITE, ProtocolCapability.SUBSCRIBE_STREAM)
-            // 显式声明为逐点位单订阅（与默认保守侧一致，但与「未声明」语义不同：
-            // 未声明意味着「协议作者没表态」，这里是协议作者明确表态）。
-            // 依据：非 key-value 形态下裸 TCP 帧没有寻址语义，TcpSession#subscribe 对
-            // addresses().size() > 1 直接 fail-fast（iot.tcp.subscribe.multi-address-unsupported）。
-            // key-value 形态（payload-format=key-value）确实支持一次订阅多个 selector，
-            // 但它是由**配置**而非协议身份决定的形态，声明是协议级的、无法随配置变化；
-            // 因此在声明层面取两种形态的交集（PER_ADDRESS，对两者都正确，代价是
-            // key-value 下 N 个点位拆成 N 次订阅）。若要为 key-value 放宽，需把
-            // 寻址方式做成「按设备配置」的能力而非协议级声明 —— 属后续独立设计。
-            .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
-            .runtimeVersionRange("0.1.0", "1.0.0")
-            .attribute("defaultPort", "0")
-            .attribute("payloadFormat", "binary|text|number|key-value")
-            .build();
-
     private final NettyTransport transport;
 
     private final FramingSpec framingSpec;
@@ -115,6 +97,9 @@ public final class TcpAdapter implements ProtocolAdapter {
 
     /** 入站载荷解码格式（默认 binary=向后兼容）。 */
     private final TcpPayloadFormat payloadFormat;
+
+    /** 本实例的描述符（订阅寻址细分依赖实例的 {@code payload-format}）。 */
+    private final ProtocolDescriptor descriptor;
 
     /**
      * 创建适配器（默认 {@code payload-format=binary}，与 0.1.0 行为一致）。
@@ -141,16 +126,58 @@ public final class TcpAdapter implements ProtocolAdapter {
         this.framingSpec = framingSpec;
         this.idleInterval = idleInterval;
         this.payloadFormat = payloadFormat == null ? TcpPayloadFormat.BINARY : payloadFormat;
+        // 描述符携带形态解析器：lambda 捕获本实例的 payloadFormat，使同一份声明
+        // 能同时正确描述 binary/text/number（逐点位）与 key-value（整批）两种部署形态
+        this.descriptor = buildDescriptor(this.payloadFormat);
+    }
+
+    /**
+     * 构造描述符：协议级默认取保守侧，并按 {@code payload-format} 细分声明。
+     *
+     * <p><b>为什么细分而不是只留单一值</b>：TCP 的多地址能力由 {@code payload-format} 决定——
+     * binary/text/number 形态下裸 TCP 帧没有寻址语义（多地址直接 fail-fast），
+     * 而 key-value 形态下订阅地址是帧内字段 selector、一帧可服务多个点位。
+     * 单一值只能取交集（逐点位），代价是 key-value 下 N 个点位拆成 N 次订阅；
+     * 这正是此前宿主自建退避表绕开框架的直接原因，因此框架必须能表达这种差异。</p>
+     *
+     * <p>未声明细分的形态（如未来新增格式忘了登记）会落到
+     * {@code SubscriptionAddressingPolicy} 的「未命中」分支：兜底保守侧并 WARN，
+     * 不会静默按整批处理。</p>
+     */
+    private static ProtocolDescriptor buildDescriptor(@Nullable TcpPayloadFormat instanceFormat) {
+        Map<String, SubscriptionAddressing> byVariant = new LinkedHashMap<>();
+        for (TcpPayloadFormat format : TcpPayloadFormat.values()) {
+            byVariant.put(format.variant(), format == TcpPayloadFormat.KEY_VALUE
+                    ? SubscriptionAddressing.BATCH
+                    : SubscriptionAddressing.PER_ADDRESS);
+        }
+        ProtocolDescriptor.Builder builder = ProtocolDescriptor.builder()
+                .code(PROTOCOL_CODE)
+                .name("TCP 透传")
+                .vendor("Netty")
+                .transport("TCP")
+                .capabilities(ProtocolCapability.WRITE, ProtocolCapability.SUBSCRIBE_STREAM)
+                // 协议级默认 = 保守侧：未取到形态（或形态未声明）时按逐点位处理
+                .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
+                .subscriptionAddressingByVariant(byVariant)
+                .runtimeVersionRange("0.1.0", "1.0.0")
+                .attribute("defaultPort", "0")
+                .attribute("payloadFormat", "binary|text|number|key-value");
+        if (instanceFormat != null) {
+            TcpPayloadFormat captured = instanceFormat;
+            builder.variantResolver(device -> captured.variant());
+        }
+        return builder.build();
     }
 
     @Override
     public ProtocolDescriptor descriptor() {
-        return DESCRIPTOR;
+        return descriptor;
     }
 
     @Override
     public Set<ProtocolCapability> capabilities() {
-        return DESCRIPTOR.capabilities();
+        return descriptor.capabilities();
     }
 
     @Override
@@ -188,12 +215,12 @@ public final class TcpAdapter implements ProtocolAdapter {
                         // 不可达、超时是不同的排查方向，一律折叠成 MSG_CONNECTION_INACTIVE
                         // 会把「配了未实现的 TLS」误读为网络问题）
                         context.metrics().recordError(MSG_CONNECTION_INACTIVE);
-                        return ProbeResult.unreachable(DESCRIPTOR,
+                        return ProbeResult.unreachable(descriptor,
                                 Stages.messageKeyOf(error, MSG_CONNECTION_INACTIVE));
                     }
                     Map<String, String> details = connection.describe();
                     connection.close();
-                    return ProbeResult.reachable(DESCRIPTOR, details);
+                    return ProbeResult.reachable(descriptor, details);
                 });
     }
 }

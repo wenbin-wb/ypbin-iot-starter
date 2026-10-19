@@ -17,6 +17,10 @@ package cn.ypbin.iot.spring.subscription;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import cn.ypbin.iot.core.exception.AddressParseException;
 import cn.ypbin.iot.core.exception.ProtocolException;
 import cn.ypbin.iot.core.i18n.IotMessageKeys;
@@ -58,6 +62,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * 订阅编排测试（issue #37 验收标准 1）。
@@ -612,6 +617,200 @@ class SubscriptionOrchestratorTest {
     }
 
     // ------------------------------------------------------------------
+    // 形态变体细分（issue #37 技术债反哺）：TCP key-value 也能整批
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("ORCH-V1(a) 未声明形态细分的协议：仍走协议级默认值（回归，不破坏既有实现）")
+    void protocolWithoutVariantsMustUseDeclaredDefault() {
+        // 只有协议级单选值、没有 variant 表 + 解析器 —— 与上一轮行为必须逐字一致
+        StubSession session = new StubSession(device(TCP), "s-1");
+        DefaultSubscriptionOrchestrator orchestrator = orchestrator(
+                descriptor(TCP, SubscriptionAddressing.BATCH), Clock.systemUTC());
+
+        await(orchestrator.subscribe(item(session, List.of(SubscriptionPoint.of("a"),
+                SubscriptionPoint.of("b"), SubscriptionPoint.of("c")))));
+
+        assertThat(session.requests())
+                .as("未声明细分时按协议级默认 BATCH 一次发全部地址")
+                .hasSize(1);
+        assertThat(session.requests().get(0).addresses()).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("ORCH-V2(b) 同一协议在不同形态下必须分流正确：key-value ⇒ 整批，binary ⇒ 逐点位")
+    void variantMustSwitchAddressingForSameProtocol() {
+        // 这是本轮的核心能力：同一个 tcp 描述符在两种部署形态下给出不同寻址方式，
+        // 宿主不再需要为 key-value 自建退避表绕开编排器
+        ProtocolDescriptor tcpWithVariants = ProtocolDescriptor.builder()
+                .code(TCP)
+                .name("TCP")
+                .capabilities(ProtocolCapability.SUBSCRIBE_STREAM)
+                .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
+                .subscriptionAddressingByVariant(Map.of(
+                        "key-value", SubscriptionAddressing.BATCH,
+                        "binary", SubscriptionAddressing.PER_ADDRESS))
+                .variantResolver(device -> device.properties().get("payloadFormat"))
+                .extensions(TestAddressExpansion.class)
+                .build();
+        DefaultSubscriptionOrchestrator orchestrator =
+                orchestrator(tcpWithVariants, Clock.systemUTC());
+
+        // key-value 形态：key-value ⇒ 一次请求带全部 3 个 selector
+        StubSession keyValueSession = new StubSession(
+                deviceWithProperty(TCP, "payloadFormat", "key-value"), "s-kv");
+        await(orchestrator.subscribe(item(keyValueSession, List.of(
+                SubscriptionPoint.of("TEMP"), SubscriptionPoint.of("HUMI"),
+                SubscriptionPoint.of("BAT")))));
+        assertThat(keyValueSession.requests())
+                .as("key-value 形态必须整批订阅（N 个 selector 一次请求）").hasSize(1);
+        assertThat(keyValueSession.requests().get(0).addresses()).hasSize(3);
+
+        // binary 形态：同一协议、不同设备 ⇒ 逐点位
+        StubSession binarySession = new StubSession(
+                deviceWithProperty(TCP, "payloadFormat", "binary"), "s-bin");
+        await(orchestrator.subscribe(item(binarySession, List.of(
+                SubscriptionPoint.of("a"), SubscriptionPoint.of("b"),
+                SubscriptionPoint.of("c")))));
+        assertThat(binarySession.requests())
+                .as("binary 形态必须是逐点位单订阅（裸 TCP 帧无寻址语义）").hasSize(3);
+        assertThat(binarySession.requests()).allSatisfy(request ->
+                assertThat(request.addresses()).hasSize(1));
+    }
+
+    @Test
+    @DisplayName("ORCH-V3(c) 声明了形态细分但当前形态未声明：兜底保守侧并 WARN 一次（绝不静默）")
+    void undeclaredVariantMustFallBackConservativeAndWarn() {
+        ProtocolDescriptor tcpWithVariants = ProtocolDescriptor.builder()
+                .code(TCP)
+                .name("TCP")
+                .capabilities(ProtocolCapability.SUBSCRIBE_STREAM)
+                .subscriptionAddressing(SubscriptionAddressing.BATCH)  // 协议级默认故意设成整批
+                .subscriptionAddressingByVariant(Map.of("key-value", SubscriptionAddressing.BATCH))
+                .variantResolver(device -> device.properties().get("payloadFormat"))
+                .build();
+
+        ListAppender<ILoggingEvent> appender = attachOrchestratorAppender();
+        try {
+            StubSession session = new StubSession(
+                    deviceWithProperty(TCP, "payloadFormat", "some-new-format"), "s-unknown");
+            await(orchestrator(tcpWithVariants, Clock.systemUTC())
+                    .subscribe(item(session, List.of(SubscriptionPoint.of("a"),
+                            SubscriptionPoint.of("b")))));
+
+            assertThat(session.requests())
+                    .as("未知形态必须兜底逐点位：把「不知道」当「支持多地址」会导致静默数据缺失")
+                    .hasSize(2);
+            assertThat(appender.list).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage())
+                        .contains("hit no declared variant")
+                        .contains("falling back");
+            });
+        } finally {
+            detachAppender(appender);
+        }
+    }
+
+    @Test
+    @DisplayName("ORCH-V4(c) 形态未命中的 WARN 按设备去重：连续多轮只 WARN 一次（不刷屏）")
+    void undeclaredVariantWarnMustBeDeduplicated() {
+        ProtocolDescriptor tcpWithVariants = ProtocolDescriptor.builder()
+                .code(TCP).name("TCP")
+                .capabilities(ProtocolCapability.SUBSCRIBE_STREAM)
+                .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
+                .subscriptionAddressingByVariant(Map.of("key-value", SubscriptionAddressing.BATCH))
+                .variantResolver(device -> device.properties().get("payloadFormat"))
+                .build();
+        ListAppender<ILoggingEvent> appender = attachOrchestratorAppender();
+        try {
+            StubSession session = new StubSession(
+                    deviceWithProperty(TCP, "payloadFormat", "unknown"), "s-dup");
+            DefaultSubscriptionOrchestrator orchestrator =
+                    orchestrator(tcpWithVariants, Clock.systemUTC());
+            SubscriptionBatchItem item = item(session, List.of(SubscriptionPoint.of("a")));
+            await(orchestrator.subscribe(item));
+            await(orchestrator.subscribe(item));
+            await(orchestrator.subscribe(item));
+
+            long warns = appender.list.stream()
+                    .filter(event -> event.getLevel() == Level.WARN)
+                    .filter(event -> event.getFormattedMessage().contains("hit no declared variant"))
+                    .count();
+            assertThat(warns).as("同一设备的未命中只 WARN 一次").isEqualTo(1L);
+        } finally {
+            detachAppender(appender);
+        }
+    }
+
+    @Test
+    @DisplayName("ORCH-V5(e) 形态细分不破坏核心不变量：部分成功仍只补失败地址（key-value 整批形态）")
+    void variantBatchModeMustKeepPartialSuccessInvariant() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-10-18T00:00:00Z"));
+        ProtocolDescriptor tcpWithVariants = ProtocolDescriptor.builder()
+                .code(TCP).name("TCP")
+                .capabilities(ProtocolCapability.SUBSCRIBE_STREAM)
+                .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
+                .subscriptionAddressingByVariant(Map.of("key-value", SubscriptionAddressing.BATCH))
+                .variantResolver(device -> device.properties().get("payloadFormat"))
+                .build();
+        DeviceSpec kvDevice = deviceWithProperty(TCP, "payloadFormat", "key-value");
+        StubSession session = new StubSession(kvDevice, "s-kv-partial");
+        session.failAddresses("TEMP");
+        DefaultSubscriptionOrchestrator orchestrator = orchestrator(tcpWithVariants, clock,
+                new SubscriptionBackoffPolicy(Duration.ofSeconds(10), Duration.ofSeconds(40), 2.0D));
+        SubscriptionBatchItem item = item(session, List.of(SubscriptionPoint.of("TEMP"),
+                SubscriptionPoint.of("HUMI")));
+
+        SubscriptionResult first = await(orchestrator.subscribe(item));
+        assertThat(first.status()).isEqualTo(SubscriptionStatus.FAILED);
+        assertThat(first.outcome().retryAddresses()).extracting(PointAddress::raw)
+                .as("整批调用失败时该批全部地址都进补订集合").containsExactlyInAnyOrder("TEMP", "HUMI");
+
+        clock.advance(Duration.ofSeconds(11));
+        session.healAll();
+        SubscriptionResult second = await(orchestrator.subscribe(item));
+        assertThat(second.status()).isEqualTo(SubscriptionStatus.SUBSCRIBED);
+        assertThat(session.requests()).as("整批形态下第二轮仍是一次请求").hasSize(2);
+    }
+
+    @Test
+    @DisplayName("ORCH-V6(e) 形态细分不破坏在途去重与退避：key-value 整批形态下并发只发一次")
+    void variantModeMustKeepInFlightDedup() {
+        ProtocolDescriptor tcpWithVariants = ProtocolDescriptor.builder()
+                .code(TCP).name("TCP")
+                .capabilities(ProtocolCapability.SUBSCRIBE_STREAM)
+                .subscriptionAddressing(SubscriptionAddressing.PER_ADDRESS)
+                .subscriptionAddressingByVariant(Map.of("key-value", SubscriptionAddressing.BATCH))
+                .variantResolver(device -> device.properties().get("payloadFormat"))
+                .build();
+        StubSession session = new StubSession(
+                deviceWithProperty(TCP, "payloadFormat", "key-value"), "s-kv-inflight");
+        session.blockSubscribe();
+        DefaultSubscriptionOrchestrator orchestrator = orchestrator(tcpWithVariants, Clock.systemUTC());
+        SubscriptionBatchItem item = item(session, List.of(SubscriptionPoint.of("TEMP"),
+                SubscriptionPoint.of("HUMI")));
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            CompletableFuture<SubscriptionResult> first =
+                    CompletableFuture.supplyAsync(() -> orchestrator.subscribe(item), pool)
+                            .thenCompose(stage -> stage.toCompletableFuture());
+            assertThat(session.awaitSubscribedInvocations(1, WAIT)).isTrue();
+            CompletableFuture<SubscriptionResult> second =
+                    CompletableFuture.supplyAsync(() -> orchestrator.subscribe(item), pool)
+                            .thenCompose(stage -> stage.toCompletableFuture());
+            session.releaseSubscribe();
+            await(first);
+            await(second);
+            assertThat(session.subscribeInvocations())
+                    .as("整批形态下一次请求 + 在途去重 = 只有 1 次协议调用")
+                    .isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 帮助方法
     // ------------------------------------------------------------------
 
@@ -644,6 +843,33 @@ class SubscriptionOrchestratorTest {
 
     private static DeviceSpec device(ProtocolCode code) {
         return new DeviceSpec(DEVICE_ID, "dev", code, "conn-1", "", Duration.ZERO, Map.of());
+    }
+
+    private static DeviceSpec deviceWithProperty(ProtocolCode code, String key, String value) {
+        return new DeviceSpec(DEVICE_ID, "dev", code, "conn-1", "", Duration.ZERO, Map.of(key, value));
+    }
+
+    /**
+     * 给编排器挂一个 logback 内存 appender，用于断言 WARN 内容与去重。
+     *
+     * <p><b>为什么必须断言日志而不是只断言行为</b>：本轮明确要求「未命中兜底 + WARN 一次，
+     * 不能静默」。只断言「兜底成逐点位」无法区分「WARN 了」与「静默降级」——
+     * 而静默降级正是要根治的问题形态。</p>
+     *
+     * @return 已挂载的 appender
+     */
+    private static ListAppender<ILoggingEvent> attachOrchestratorAppender() {
+        Logger logger = (Logger) LoggerFactory.getLogger(DefaultSubscriptionOrchestrator.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private static void detachAppender(ListAppender<ILoggingEvent> appender) {
+        Logger logger = (Logger) LoggerFactory.getLogger(DefaultSubscriptionOrchestrator.class);
+        logger.detachAppender(appender);
+        appender.stop();
     }
 
     private static SubscriptionBatchItem item(DeviceSession session, List<SubscriptionPoint> points) {

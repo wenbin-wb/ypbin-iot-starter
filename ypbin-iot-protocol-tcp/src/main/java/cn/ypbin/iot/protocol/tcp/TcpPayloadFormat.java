@@ -41,24 +41,41 @@ import java.nio.charset.StandardCharsets;
 public enum TcpPayloadFormat {
 
     /** 文本：严格 UTF-8 解码为 {@code String}；<b>非 UTF-8 帧产出 BAD 值而不是损坏的字符串</b>。 */
-    TEXT(0, "文本（UTF-8）"),
+    TEXT(0, "文本（UTF-8）", "text"),
 
     /** 数值：解析为 {@code Double}；无法解析（或非 UTF-8）时产出 BAD 值。 */
-    NUMBER(1, "数值"),
+    NUMBER(1, "数值", "number"),
 
     /** 二进制：原样交付 {@code byte[]}，不做任何解码（默认，向后兼容）。 */
-    BINARY(2, "二进制"),
+    BINARY(2, "二进制", "binary"),
 
     /** 键值文本：按 {@code KEY=VALUE} 拆帧，用订阅地址（{@code PointAddress.raw}）作为 selector 取值。 */
-    KEY_VALUE(3, "键值文本（valueSelector）");
+    KEY_VALUE(3, "键值文本（valueSelector）", "key-value");
 
     private final int code;
 
     private final String desc;
 
-    TcpPayloadFormat(int code, String desc) {
+    private final String variant;
+
+    TcpPayloadFormat(int code, String desc, String variant) {
         this.code = code;
         this.desc = desc;
+        this.variant = variant;
+    }
+
+    /**
+     * 形态变体键：用于向框架声明「本形态下的订阅寻址能力」。
+     *
+     * <p>与配置项取值同字面量（{@code binary|text|number|key-value}），由
+     * {@link TcpAdapter} 在描述符里作为 {@code subscriptionAddressingByVariant} 的键声明。
+     * 框架不认识这些字符串的含义，只拿它查表——这让「同一协议在不同形态下能力不同」
+     * 能被正确表达，而不必在宿主里按 {@code payload-format} 硬编码分流。</p>
+     *
+     * @return 稳定的形态键
+     */
+    public String variant() {
+        return variant;
     }
 
     /**
