@@ -83,7 +83,7 @@
         <modbus.version>2.1.6</modbus.version>
 
         <!-- 协议库：MQTT -->
-        <hivemq.mqtt.version>1.4.0</hivemq.mqtt.version>
+        <hivemq.mqtt.version>1.4.1</hivemq.mqtt.version>
         <moquette.version>0.17</moquette.version>
 
         <!-- 协议库：OPC UA（MPL-2.0 / EPL-2.0 双许可） -->
