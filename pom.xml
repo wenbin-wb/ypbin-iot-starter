@@ -17,7 +17,7 @@
              ⚠️ 2026-10-19：4.0.0 → 4.1.0（母仓 4.1.0 发布后对齐）。⚠️ 2026-10-18（issue #34）：3.8.0 → 4.0.0。本仓**代码不依赖**母仓任何模块
              （grep cn.ypbin.starter 零命中），只承袭它的依赖版本管理与构建门禁；
              升到 4.0.0 后下游宿主可去掉「先声明 starter BOM 再声明 iot BOM」的顺序依赖。 -->
-        <version>4.2.0</version>
+        <version>4.2.1</version>
         <relativePath/>
     </parent>
 
