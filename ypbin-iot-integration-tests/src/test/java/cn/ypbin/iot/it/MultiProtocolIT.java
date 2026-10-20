@@ -49,6 +49,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -135,6 +136,23 @@ class MultiProtocolIT {
         if (tcpServer != null) {
             tcpServer.close();
         }
+    }
+
+    /**
+     * 等待两台设备都绑定完成后再断言。
+     *
+     * <p><b>为什么需要</b>（2026-10-20 实测偶发）：peer（嵌入式 broker / TCP server）在
+     * {@code @BeforeAll} 里才启动，而 Spring 上下文（设备绑定）此前已经建好——首轮连接失败后由
+     * 生命周期异步重试绑定。原来各用例<b>立刻</b>断言，于是「重试还没跑完」时失败：
+     * {@code MultiProtocolIT.metricsMustBeSharedAcrossProtocols} 报
+     * {@code Expected size: 2 but was: 1}（同提交重跑即过）。</p>
+     *
+     * <p>修正方式与仓内其它异步用例一致：<b>先有界等待、再断言</b>。等待超时仍失败时，
+     * 用例自身的断言会报出真实原因，不会因为「等得不够」而误判。</p>
+     */
+    @BeforeEach
+    void awaitDevicesBound() {
+        awaitUntil(() -> lifecycle.sessionCount() == 2, Duration.ofSeconds(15));
     }
 
     @Test
